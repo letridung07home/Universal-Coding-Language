@@ -63,7 +63,8 @@ impl<'src> Lexer<'src> {
             if byte == b'_' || byte.is_ascii_alphabetic() {
                 let start = pos;
                 pos += 1;
-                while pos < bytes.len() && (bytes[pos] == b'_' || bytes[pos].is_ascii_alphanumeric())
+                while pos < bytes.len()
+                    && (bytes[pos] == b'_' || bytes[pos].is_ascii_alphanumeric())
                 {
                     pos += 1;
                 }
