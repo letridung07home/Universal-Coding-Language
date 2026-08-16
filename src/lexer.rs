@@ -1,6 +1,6 @@
 //! Lexer: turns source text into a stream of tokens.
 
-use crate::diagnostic::DiagnosticSink;
+use crate::diagnostic::{Diagnostic, DiagnosticSink};
 use crate::source::{SourceFile, Span};
 
 /// The kind of a lexical token.
@@ -40,9 +40,169 @@ impl<'src> Lexer<'src> {
     }
 
     /// Runs the lexer, emitting any errors into `sink`.
-    pub fn tokenize(&self, _sink: &mut DiagnosticSink) -> Vec<Token> {
-        // Keep the field read until the scanner is implemented.
-        let _ = self.source;
-        todo!("lexer not yet implemented");
+    ///
+    /// The returned vector always ends with a [`TokenKind::Eof`] token whose
+    /// span points one byte past the last byte of the source. On an unknown
+    /// character, an error diagnostic is emitted and scanning continues.
+    pub fn tokenize(&self, sink: &mut DiagnosticSink) -> Vec<Token> {
+        let contents = self.source.contents();
+        let bytes = contents.as_bytes();
+        let mut tokens = Vec::new();
+        let mut pos = 0;
+
+        while pos < bytes.len() {
+            let byte = bytes[pos];
+
+            // Whitespace separates tokens and carries no meaning.
+            if byte.is_ascii_whitespace() {
+                pos += 1;
+                continue;
+            }
+
+            // Identifiers and keywords: `[A-Za-z_][A-Za-z0-9_]*`.
+            if byte == b'_' || byte.is_ascii_alphabetic() {
+                let start = pos;
+                pos += 1;
+                while pos < bytes.len() && (bytes[pos] == b'_' || bytes[pos].is_ascii_alphanumeric())
+                {
+                    pos += 1;
+                }
+                tokens.push(Token {
+                    kind: TokenKind::Ident,
+                    span: Span::new(start, pos),
+                });
+                continue;
+            }
+
+            // Integer literals: `[0-9]+`.
+            if byte.is_ascii_digit() {
+                let start = pos;
+                pos += 1;
+                while pos < bytes.len() && bytes[pos].is_ascii_digit() {
+                    pos += 1;
+                }
+                tokens.push(Token {
+                    kind: TokenKind::Integer,
+                    span: Span::new(start, pos),
+                });
+                continue;
+            }
+
+            // Any ASCII punctuation character.
+            if byte.is_ascii_punctuation() {
+                let start = pos;
+                pos += 1;
+                tokens.push(Token {
+                    kind: TokenKind::Punctuation(byte as char),
+                    span: Span::new(start, pos),
+                });
+                continue;
+            }
+
+            // Unrecognized character: report it and recover by skipping the
+            // whole UTF-8 code point so `pos` stays on a char boundary.
+            let ch = contents[pos..]
+                .chars()
+                .next()
+                .expect("`pos` always points at a char boundary");
+            let width = ch.len_utf8();
+            sink.emit(
+                Diagnostic::error(format!("unexpected character `{ch}`"))
+                    .at(Span::new(pos, pos + width)),
+            );
+            pos += width;
+        }
+
+        tokens.push(Token {
+            kind: TokenKind::Eof,
+            span: Span::new(pos, pos),
+        });
+
+        tokens
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::Severity;
+
+    /// Extracts the source text covered by a token's span.
+    fn lexeme<'src>(source: &'src SourceFile, token: &Token) -> &'src str {
+        &source.contents()[token.span.start..token.span.end]
+    }
+
+    #[test]
+    fn empty_source_yields_only_eof() {
+        let source = SourceFile::new("empty.ucl", "");
+        let tokens = Lexer::new(&source).tokenize(&mut DiagnosticSink::new());
+
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].kind, TokenKind::Eof);
+        assert_eq!(tokens[0].span, Span::new(0, 0));
+    }
+
+    #[test]
+    fn tokenizes_identifiers_integers_and_punctuation() {
+        let source = SourceFile::new("main.ucl", "let answer = 42;");
+        let tokens = Lexer::new(&source).tokenize(&mut DiagnosticSink::new());
+
+        let kinds: Vec<TokenKind> = tokens.iter().map(|token| token.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::Ident,
+                TokenKind::Ident,
+                TokenKind::Punctuation('='),
+                TokenKind::Integer,
+                TokenKind::Punctuation(';'),
+                TokenKind::Eof,
+            ]
+        );
+        assert_eq!(lexeme(&source, &tokens[0]), "let");
+        assert_eq!(lexeme(&source, &tokens[1]), "answer");
+        assert_eq!(lexeme(&source, &tokens[3]), "42");
+    }
+
+    #[test]
+    fn skips_whitespace_and_records_spans() {
+        let source = SourceFile::new("main.ucl", "  x \n 12 ");
+        let tokens = Lexer::new(&source).tokenize(&mut DiagnosticSink::new());
+
+        let kinds: Vec<TokenKind> = tokens.iter().map(|token| token.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![TokenKind::Ident, TokenKind::Integer, TokenKind::Eof]
+        );
+        assert_eq!(lexeme(&source, &tokens[0]), "x");
+        assert_eq!(tokens[0].span, Span::new(2, 3));
+        assert_eq!(tokens[1].span, Span::new(6, 8));
+    }
+
+    #[test]
+    fn reports_unknown_characters_and_recovers() {
+        let source = SourceFile::new("main.ucl", "let π = 3;");
+        let mut sink = DiagnosticSink::new();
+        let tokens = Lexer::new(&source).tokenize(&mut sink);
+
+        assert!(sink.has_errors());
+
+        let diagnostics: Vec<_> = sink.iter().collect();
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].severity, Severity::Error);
+        assert_eq!(diagnostics[0].span, Some(Span::new(4, 6)));
+
+        // Recovery: the tokens after the bad character are still produced.
+        let kinds: Vec<TokenKind> = tokens.iter().map(|token| token.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::Ident,
+                TokenKind::Punctuation('='),
+                TokenKind::Integer,
+                TokenKind::Punctuation(';'),
+                TokenKind::Eof,
+            ]
+        );
     }
 }
