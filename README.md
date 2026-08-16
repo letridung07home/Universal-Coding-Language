@@ -3,8 +3,8 @@
 A universal coding language that excels in every task possible.
 
 > **Status:** early scaffold. The project layout, tooling, and CI are in
-> place; the lexer and parser are implemented, while the evaluator remains
-> stubbed out.
+> place; the lexer, parser, and evaluator are implemented and wired together
+> by the `ucl` CLI.
 
 ## Repository layout
 
@@ -32,7 +32,7 @@ A universal coding language that excels in every task possible.
 
 ```sh
 cargo build            # debug build
-cargo run              # run the `ucl` binary
+cargo run -- <file>    # evaluate a `.ucl` source file
 cargo build --release  # optimized build
 ```
 
@@ -51,6 +51,7 @@ cargo test                                             # run tests
 - [x] Implement the lexer
 - [x] Implement the parser and AST
 - [x] Implement the evaluator
+- [x] Wire up the `ucl` CLI
 - [ ] Add diagnostics rendering with source excerpts
 
 ## License
