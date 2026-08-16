@@ -3,8 +3,8 @@
 A universal coding language that excels in every task possible.
 
 > **Status:** early scaffold. The project layout, tooling, and CI are in
-> place; the language pipeline (lexer → parser → evaluator) is stubbed out and
-> not yet implemented.
+> place; the lexer is implemented, while the parser and evaluator remain
+> stubbed out.
 
 ## Repository layout
 
@@ -47,7 +47,7 @@ cargo test                                             # run tests
 ## Roadmap
 
 - [ ] Write the language specification
-- [ ] Implement the lexer
+- [x] Implement the lexer
 - [ ] Implement the parser and AST
 - [ ] Implement the evaluator
 - [ ] Add diagnostics rendering with source excerpts
