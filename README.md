@@ -42,6 +42,7 @@ cargo build --release  # optimized build
 cargo fmt --all -- --check                             # check formatting
 cargo clippy --all-targets --all-features -- -D warnings  # lint
 cargo test                                             # run tests
+# Note: cargo test is deligated to ci (github action)
 ```
 
 ## Roadmap
@@ -49,7 +50,7 @@ cargo test                                             # run tests
 - [ ] Write the language specification
 - [x] Implement the lexer
 - [x] Implement the parser and AST
-- [ ] Implement the evaluator
+- [x] Implement the evaluator
 - [ ] Add diagnostics rendering with source excerpts
 
 ## License
