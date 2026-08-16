@@ -51,9 +51,22 @@ fn prints_nothing_for_unit_results() {
 }
 
 #[test]
-fn reports_runtime_errors_to_stderr_and_fails() {
+fn reports_runtime_errors_with_a_source_excerpt() {
     let (stdout, stderr, success) = run("1 / 0;");
     assert!(!success);
     assert!(stdout.is_empty());
-    assert!(stderr.contains("division by zero"));
+    assert!(stderr.contains("error: division by zero"));
+    assert!(stderr.contains("  1 | 1 / 0;"));
+    assert!(stderr.contains("    | ^^^^^"));
+}
+
+#[test]
+fn renders_each_line_of_a_multiline_error_span() {
+    let (stdout, stderr, success) = run("1 /\n  0;");
+    assert!(!success);
+    assert!(stdout.is_empty());
+    assert!(stderr.contains("  1 | 1 /"));
+    assert!(stderr.contains("  2 |   0;"));
+    assert!(stderr.contains("    | ^^^"));
+    assert!(stderr.contains("    | ^^^"));
 }

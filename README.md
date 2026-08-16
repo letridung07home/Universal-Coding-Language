@@ -52,7 +52,7 @@ cargo test                                             # run tests
 - [x] Implement the parser and AST
 - [x] Implement the evaluator
 - [x] Wire up the `ucl` CLI
-- [ ] Add diagnostics rendering with source excerpts
+- [x] Add diagnostics rendering with source excerpts
 
 ## License
 
