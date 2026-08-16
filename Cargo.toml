@@ -1,0 +1,29 @@
+[package]
+name = "universal-coding-language"
+version = "0.1.0"
+edition = "2024"
+description = "A universal coding language that excels in every task possible"
+repository = "https://github.com/letridung07home/Universal-Coding-Language.git"
+readme = "README.md"
+
+[lib]
+name = "ucl"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ucl"
+path = "src/main.rs"
+
+[dependencies]
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+all = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
