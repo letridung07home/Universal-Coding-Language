@@ -47,7 +47,7 @@ cargo test                                             # run tests
 
 ## Roadmap
 
-- [ ] Write the language specification
+- [x] Write the [language specification](docs/spec.md)
 - [x] Implement the lexer
 - [x] Implement the parser and AST
 - [x] Implement the evaluator
