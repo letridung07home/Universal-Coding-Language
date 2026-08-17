@@ -59,6 +59,15 @@ impl<'src> Lexer<'src> {
                 continue;
             }
 
+            // Line comments: `//` runs to the end of the line and is
+            // ignored, so a comment may appear wherever whitespace may.
+            if byte == b'/' && pos + 1 < bytes.len() && bytes[pos + 1] == b'/' {
+                while pos < bytes.len() && bytes[pos] != b'\n' {
+                    pos += 1;
+                }
+                continue;
+            }
+
             // Identifiers and keywords: `[A-Za-z_][A-Za-z0-9_]*`.
             if byte == b'_' || byte.is_ascii_alphabetic() {
                 let start = pos;
@@ -202,6 +211,85 @@ mod tests {
                 TokenKind::Punctuation('='),
                 TokenKind::Integer,
                 TokenKind::Punctuation(';'),
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn skips_line_comments() {
+        let source = SourceFile::new("main.ucl", "let x = 1; // trailing comment");
+        let mut sink = DiagnosticSink::new();
+        let tokens = Lexer::new(&source).tokenize(&mut sink);
+
+        assert!(!sink.has_errors());
+        let kinds: Vec<TokenKind> = tokens.iter().map(|token| token.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::Ident,
+                TokenKind::Ident,
+                TokenKind::Punctuation('='),
+                TokenKind::Integer,
+                TokenKind::Punctuation(';'),
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn comment_only_source_yields_only_eof() {
+        let source = SourceFile::new("main.ucl", "// nothing but a comment");
+        let mut sink = DiagnosticSink::new();
+        let tokens = Lexer::new(&source).tokenize(&mut sink);
+
+        assert!(!sink.has_errors());
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].kind, TokenKind::Eof);
+    }
+
+    #[test]
+    fn comment_ends_at_the_end_of_the_line() {
+        let source = SourceFile::new("main.ucl", "1 // comment\n2");
+        let mut sink = DiagnosticSink::new();
+        let tokens = Lexer::new(&source).tokenize(&mut sink);
+
+        assert!(!sink.has_errors());
+        let kinds: Vec<TokenKind> = tokens.iter().map(|token| token.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![TokenKind::Integer, TokenKind::Integer, TokenKind::Eof]
+        );
+        // The token after the comment points at the `2` on the next line.
+        assert_eq!(lexeme(&source, &tokens[1]), "2");
+    }
+
+    #[test]
+    fn comment_content_is_ignored_even_when_it_looks_like_code() {
+        let source = SourceFile::new("main.ucl", "// let x = 1; ( ) { } 42 // nested\nx");
+        let mut sink = DiagnosticSink::new();
+        let tokens = Lexer::new(&source).tokenize(&mut sink);
+
+        assert!(!sink.has_errors());
+        let kinds: Vec<TokenKind> = tokens.iter().map(|token| token.kind).collect();
+        assert_eq!(kinds, vec![TokenKind::Ident, TokenKind::Eof]);
+        assert_eq!(lexeme(&source, &tokens[0]), "x");
+    }
+
+    #[test]
+    fn single_slash_is_still_the_division_operator() {
+        let source = SourceFile::new("main.ucl", "6 / 2");
+        let mut sink = DiagnosticSink::new();
+        let tokens = Lexer::new(&source).tokenize(&mut sink);
+
+        assert!(!sink.has_errors());
+        let kinds: Vec<TokenKind> = tokens.iter().map(|token| token.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::Integer,
+                TokenKind::Punctuation('/'),
+                TokenKind::Integer,
                 TokenKind::Eof,
             ]
         );

@@ -70,3 +70,11 @@ fn renders_each_line_of_a_multiline_error_span() {
     assert!(stderr.contains("    | ^^^"));
     assert!(stderr.contains("    | ^^^"));
 }
+
+#[test]
+fn ignores_comments_when_evaluating() {
+    let (stdout, stderr, success) = run("// a comment\n2 + 3; // trailing\n");
+    assert!(success, "stderr: {stderr}");
+    assert_eq!(stdout, "5\n");
+    assert!(stderr.is_empty());
+}

@@ -34,8 +34,15 @@ ignored.
 
 ### 2.3 Comments
 
-*Future work.* Comments are not yet recognized and are treated as ordinary
-characters.
+A line comment begins with `//` and runs to the end of the line; the
+terminating newline is not part of the comment. Comments are ignored by the
+lexer and produce no tokens, so a comment may appear wherever whitespace may.
+
+```
+comment ::= "//" [^\n]*
+```
+
+*Future work.* Block comments (`/* ... */`), which may span multiple lines.
 
 ### 2.4 Identifiers
 
@@ -62,7 +69,8 @@ literal syntax).
 
 The characters `( ) { } ; = + - * / % ^ < > & | !` are significant. Any other
 ASCII punctuation character is tokenized as punctuation; one that no parser
-production accepts produces an error at that position.
+production accepts produces an error at that position. The two-character
+sequence `//` begins a comment (§2.3) and is not tokenized as punctuation.
 
 ### 2.7 Unrecognized characters
 
