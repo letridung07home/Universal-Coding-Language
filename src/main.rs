@@ -223,11 +223,7 @@ mod tests {
 
         assert_eq!(
             format_diagnostic(&diagnostic, &source),
-            "error: division by zero\n\
-  --> main.ucl:1:1\n\
-   |\n\
-  1 | 1 / 0;\n\
-    | ^^^^^\n"
+            "error: division by zero\n  --> main.ucl:1:1\n   |\n  1 | 1 / 0;\n    | ^^^^^\n"
         );
     }
 
