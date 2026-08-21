@@ -37,9 +37,16 @@ impl SourceFile {
     /// Returns the source text covered by the given [`Span`].
     ///
     /// This is a convenience method for extracting the substring corresponding
-    /// to a span's byte range.
-    pub fn slice(&self, span: Span) -> &str {
-        &self.contents[span.start..span.end]
+    /// to a span's byte range. It returns `None` rather than panicking when
+    /// the span is invalid: when its start is after its end, when either
+    /// offset lies outside the file's contents, or when either offset does not
+    /// fall on a UTF-8 character boundary.
+    pub fn slice(&self, span: Span) -> Option<&str> {
+        let valid = span.start <= span.end
+            && span.end <= self.contents.len()
+            && self.contents.is_char_boundary(span.start)
+            && self.contents.is_char_boundary(span.end);
+        valid.then(|| &self.contents[span.start..span.end])
     }
 }
 
@@ -62,8 +69,11 @@ impl Span {
     }
 
     /// The number of bytes covered by this span.
+    ///
+    /// This is saturating: an invalid span whose start is after its end
+    /// reports a length of `0` instead of underflowing.
     pub const fn len(self) -> usize {
-        self.end - self.start
+        self.end.saturating_sub(self.start)
     }
 
     /// Whether this span covers zero bytes.
@@ -88,5 +98,32 @@ mod tests {
         let span = Span::new(4, 9);
         assert_eq!(span.len(), 5);
         assert!(!span.is_empty());
+    }
+
+    #[test]
+    fn span_len_saturates_for_inverted_spans() {
+        let span = Span::new(5, 3);
+        assert_eq!(span.len(), 0);
+        assert!(!span.is_empty());
+    }
+
+    #[test]
+    fn slice_returns_the_text_for_valid_spans() {
+        let source = SourceFile::new("main.ucl", "héllo");
+        assert_eq!(source.slice(Span::new(0, 3)), Some("hé"));
+        assert_eq!(source.slice(Span::new(3, 6)), Some("llo"));
+        assert_eq!(source.slice(Span::new(6, 6)), Some(""));
+    }
+
+    #[test]
+    fn slice_returns_none_for_invalid_spans() {
+        let source = SourceFile::new("main.ucl", "héllo");
+
+        // Inverted span.
+        assert_eq!(source.slice(Span::new(3, 1)), None);
+        // End offset outside the contents.
+        assert_eq!(source.slice(Span::new(0, 7)), None);
+        // Offset that splits a multi-byte character.
+        assert_eq!(source.slice(Span::new(1, 2)), None);
     }
 }
