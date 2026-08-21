@@ -16,6 +16,6 @@ pub mod source;
 
 pub use diagnostic::{Diagnostic, DiagnosticSink, Severity};
 pub use evaluator::{Evaluator, Value};
-pub use lexer::{Lexer, Token, TokenKind};
+pub use lexer::{Keyword, Lexer, Token, TokenKind};
 pub use parser::{AstKind, AstNode, Parser};
 pub use source::{BytePos, SourceFile, Span};

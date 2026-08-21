@@ -1,7 +1,7 @@
 //! Parser: builds an abstract syntax tree from tokens.
 
 use crate::diagnostic::{Diagnostic, DiagnosticSink};
-use crate::lexer::{Token, TokenKind};
+use crate::lexer::{Keyword, Token, TokenKind};
 use crate::source::Span;
 
 /// A node in the abstract syntax tree.
@@ -33,8 +33,8 @@ pub enum AstKind {
     },
     /// A declaration in the form `let name = value`.
     ///
-    /// The lexer currently classifies keywords as identifiers, so the parser
-    /// recognizes the declaration shape `Ident Ident = expression`.
+    /// `let` is a reserved keyword token, so the declaration is recognized
+    /// from that keyword rather than from the token shape.
     Let {
         /// Span of the declaration keyword.
         keyword: Span,
@@ -91,12 +91,19 @@ pub struct Parser {
     tokens: Vec<Token>,
     /// The current position in the token stream.
     cursor: usize,
+    /// The current expression-nesting depth, used to guard against deeply
+    /// nested input that would otherwise overflow the call stack.
+    depth: usize,
 }
 
 impl Parser {
     /// Creates a parser ready to consume the given `tokens`.
     pub fn new(tokens: Vec<Token>) -> Self {
-        Self { tokens, cursor: 0 }
+        Self {
+            tokens,
+            cursor: 0,
+            depth: 0,
+        }
     }
 
     /// Parses the token stream into an abstract syntax tree.
@@ -152,15 +159,22 @@ impl Parser {
     /// A statement can be a declaration (`let x = 5;`), an assignment (`x = 5;`),
     /// an expression statement (`x + 5;`), or a block (`{ ... }`).
     fn parse_statement(&mut self, sink: &mut DiagnosticSink) -> Option<AstNode> {
-        // Until keywords have their own token kinds, `let name = value` is
-        // identified by its unambiguous token shape.
-        if self.check_kind(TokenKind::Ident)
-            && self.peek_kind(1) == Some(TokenKind::Ident)
-            && self.peek_is_punctuation(2, '=')
-        {
+        // `let` is a reserved keyword, so `let name = value` is recognized
+        // from its keyword token rather than from the token shape.
+        if self.check_keyword(Keyword::Let) {
             let keyword = self.advance().span;
+
+            if !self.check_kind(TokenKind::Ident) {
+                self.error_current("expected an identifier after `let`", sink);
+                return None;
+            }
             let name = self.advance().span;
-            self.advance(); // `=`
+
+            if !self.consume_punctuation('=') {
+                self.error_current("expected `=` after the declared identifier", sink);
+                return None;
+            }
+
             let value = self.parse_expression(0, sink)?;
             return Some(AstNode::new(
                 Span::new(keyword.start, value.span.end),
@@ -226,19 +240,34 @@ impl Parser {
 
     /// Parses a unary operator expression (e.g., `-x`, `!true`).
     fn parse_unary(&mut self, sink: &mut DiagnosticSink) -> Option<AstNode> {
-        if let Some(operator) = self.prefix_operator() {
-            let start = self.advance().span.start;
-            let operand = self.parse_unary(sink)?;
-            return Some(AstNode::new(
-                Span::new(start, operand.span.end),
-                AstKind::Unary {
-                    operator,
-                    operand: Box::new(operand),
-                },
-            ));
+        // Track expression-nesting depth so pathologically nested input is
+        // rejected with an error instead of overflowing the call stack.
+        self.depth += 1;
+        if self.depth > MAX_NESTING_DEPTH {
+            self.depth -= 1;
+            self.error_current("expression nesting is too deep", sink);
+            return None;
         }
 
-        self.parse_primary(sink)
+        let result = match self.prefix_operator() {
+            Some(operator) => {
+                let start = self.advance().span.start;
+                match self.parse_unary(sink) {
+                    Some(operand) => Some(AstNode::new(
+                        Span::new(start, operand.span.end),
+                        AstKind::Unary {
+                            operator,
+                            operand: Box::new(operand),
+                        },
+                    )),
+                    None => None,
+                }
+            }
+            None => self.parse_primary(sink),
+        };
+
+        self.depth -= 1;
+        result
     }
 
     /// Parses a primary expression (the atomic elements of expressions).
@@ -389,6 +418,13 @@ impl Parser {
             .is_some_and(|token| token.kind == kind)
     }
 
+    /// Returns true if the current token is the given keyword.
+    fn check_keyword(&self, keyword: Keyword) -> bool {
+        self.tokens
+            .get(self.cursor)
+            .is_some_and(|token| token.kind == TokenKind::Keyword(keyword))
+    }
+
     /// Returns true if the current token is the given punctuation character.
     fn check_punctuation(&self, punctuation: char) -> bool {
         self.tokens
@@ -406,19 +442,14 @@ impl Parser {
             false
         }
     }
-
-    /// Returns the kind of the token at the given offset from the cursor.
-    fn peek_kind(&self, offset: usize) -> Option<TokenKind> {
-        self.tokens
-            .get(self.cursor + offset)
-            .map(|token| token.kind)
-    }
-
-    /// Returns true if the token at the given offset is the given punctuation.
-    fn peek_is_punctuation(&self, offset: usize, punctuation: char) -> bool {
-        self.peek_kind(offset) == Some(TokenKind::Punctuation(punctuation))
-    }
 }
+
+/// The maximum expression-nesting depth the parser will accept.
+///
+/// Deeply nested input (for example, thousands of nested parentheses or
+/// unary operators) is rejected with an error rather than overflowing the
+/// call stack during recursive-descent parsing.
+const MAX_NESTING_DEPTH: usize = 256;
 
 /// Operator precedence levels (higher = binds tighter).
 ///
@@ -503,6 +534,70 @@ mod tests {
         assert!(
             sink.iter()
                 .any(|diagnostic| { diagnostic.message.contains("expected an expression") })
+        );
+    }
+
+    #[test]
+    fn let_is_a_keyword_not_an_identifier() {
+        let (ast, sink) = parse("let x = 1;");
+
+        assert!(!sink.has_errors());
+        let AstKind::Program { statements } = ast.kind else {
+            panic!("expected program")
+        };
+        assert_eq!(statements.len(), 1);
+        assert!(matches!(statements[0].kind, AstKind::Let { .. }));
+    }
+
+    #[test]
+    fn an_arbitrary_identifier_cannot_declare_a_binding() {
+        let (_ast, sink) = parse("foo bar = 3;");
+
+        assert!(sink.has_errors());
+    }
+
+    #[test]
+    fn let_cannot_be_used_as_an_identifier() {
+        let (_ast, sink) = parse("let let = 5;");
+
+        assert!(sink.has_errors());
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("expected an identifier"))
+        );
+    }
+
+    #[test]
+    fn rejects_deeply_nested_parentheses() {
+        let depth = 1000;
+        let source_text = format!("{}1{}", "(".repeat(depth), ")".repeat(depth));
+        let source = SourceFile::new("test.ucl", &source_text);
+        let mut sink = DiagnosticSink::new();
+        let tokens = Lexer::new(&source).tokenize(&mut sink);
+        let ast = Parser::new(tokens).parse(&mut sink);
+
+        assert!(ast.is_some());
+        assert!(sink.has_errors());
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("nesting is too deep"))
+        );
+    }
+
+    #[test]
+    fn rejects_deeply_nested_unary_operators() {
+        let depth = 1000;
+        let source_text = format!("{}1", "-".repeat(depth));
+        let source = SourceFile::new("test.ucl", &source_text);
+        let mut sink = DiagnosticSink::new();
+        let tokens = Lexer::new(&source).tokenize(&mut sink);
+        let ast = Parser::new(tokens).parse(&mut sink);
+
+        assert!(ast.is_some());
+        assert!(sink.has_errors());
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("nesting is too deep"))
         );
     }
 }

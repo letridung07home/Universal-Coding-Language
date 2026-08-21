@@ -50,9 +50,10 @@ comment ::= "//" [^\n]*
 identifier ::= [A-Za-z_] [A-Za-z0-9_]*
 ```
 
-Identifiers name bindings. There are no reserved words in the current lexer;
-the `let` declaration form is recognized by the parser from its token shape
-(`identifier identifier =`), not from a keyword token kind.
+Identifiers name bindings. The word `let` is a reserved keyword: the lexer
+produces a dedicated keyword token for it, and it cannot be used as an
+identifier. The parser recognizes declarations from that keyword token rather
+than from the token shape.
 
 ### 2.5 Integer literals
 
@@ -235,7 +236,13 @@ source span. Errors include:
 - integer overflow in checked arithmetic;
 - division or remainder by zero;
 - negative exponents;
-- operators applied to operands of the wrong type.
+- operators applied to operands of the wrong type;
+- expression nesting that exceeds the parser's or evaluator's depth limit.
+
+The parser rejects expressions nested more than a fixed depth (currently 256
+levels) to prevent stack overflow on pathological input. The evaluator enforces
+a separate, higher limit as a safety net for deeply nested ASTs constructed
+through the library API. Deeper nesting is reported as an error.
 
 Lexical and syntactic analysis recover and continue after an error where
 possible, so a single run may report more than one diagnostic. Diagnostics are

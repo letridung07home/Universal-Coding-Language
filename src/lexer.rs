@@ -3,21 +3,30 @@
 use crate::diagnostic::{Diagnostic, DiagnosticSink};
 use crate::source::{SourceFile, Span};
 
+/// A reserved word recognized by the lexer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Keyword {
+    /// The `let` declaration keyword.
+    Let,
+}
+
 /// The kind of a lexical token.
 ///
 /// This vocabulary is intentionally small for now and will grow as the
 /// language specification is written.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TokenKind {
-    /// An identifier or keyword: `foo`, `let`, `if`, etc.
+    /// An identifier: `foo`, `answer`, etc.
     ///
-    /// Note: The lexer does not distinguish between keywords and identifiers;
-    /// the parser recognizes keyword patterns from the token stream.
+    /// Keywords such as `let` are produced as [`TokenKind::Keyword`] rather
+    /// than as identifiers, so they cannot be used as names.
     Ident,
     /// An integer literal: `42`, `123`, etc.
     Integer,
     /// A punctuation character: `(`, `)`, `{`, `}`, `+`, `-`, etc.
     Punctuation(char),
+    /// A reserved word such as `let`.
+    Keyword(Keyword),
     /// End of input marker.
     ///
     /// Always appears as the last token in the stream.
@@ -87,8 +96,13 @@ impl<'src> Lexer<'src> {
                 {
                     pos += 1;
                 }
+                let kind = if &contents[start..pos] == "let" {
+                    TokenKind::Keyword(Keyword::Let)
+                } else {
+                    TokenKind::Ident
+                };
                 tokens.push(Token {
-                    kind: TokenKind::Ident,
+                    kind,
                     span: Span::new(start, pos),
                 });
                 continue;
@@ -173,7 +187,7 @@ mod tests {
         assert_eq!(
             kinds,
             vec![
-                TokenKind::Ident,
+                TokenKind::Keyword(Keyword::Let),
                 TokenKind::Ident,
                 TokenKind::Punctuation('='),
                 TokenKind::Integer,
@@ -184,6 +198,24 @@ mod tests {
         assert_eq!(lexeme(&source, &tokens[0]), "let");
         assert_eq!(lexeme(&source, &tokens[1]), "answer");
         assert_eq!(lexeme(&source, &tokens[3]), "42");
+    }
+
+    #[test]
+    fn recognizes_let_as_a_keyword() {
+        let source = SourceFile::new("main.ucl", "let letx _let let");
+        let tokens = Lexer::new(&source).tokenize(&mut DiagnosticSink::new());
+
+        let kinds: Vec<TokenKind> = tokens.iter().map(|token| token.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::Keyword(Keyword::Let),
+                TokenKind::Ident,
+                TokenKind::Ident,
+                TokenKind::Keyword(Keyword::Let),
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]
