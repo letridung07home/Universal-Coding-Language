@@ -1,6 +1,9 @@
 //! Source text handling: files, byte positions, and spans.
 
 /// A byte offset into a [`SourceFile`].
+///
+/// All positions within source files are represented as byte offsets,
+/// which allows efficient indexing and span calculations.
 pub type BytePos = usize;
 
 /// A single source file, held in memory as UTF-8 text.
@@ -29,6 +32,14 @@ impl SourceFile {
     /// The file's contents.
     pub fn contents(&self) -> &str {
         &self.contents
+    }
+
+    /// Returns the source text covered by the given [`Span`].
+    ///
+    /// This is a convenience method for extracting the substring corresponding
+    /// to a span's byte range.
+    pub fn slice(&self, span: Span) -> &str {
+        &self.contents[span.start..span.end]
     }
 }
 

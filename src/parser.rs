@@ -5,15 +5,19 @@ use crate::lexer::{Token, TokenKind};
 use crate::source::Span;
 
 /// A node in the abstract syntax tree.
+///
+/// Each node carries a [`Span`] indicating its source location and an
+/// [`AstKind`] describing the syntactic construct it represents.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AstNode {
-    /// Where this node came from in the source.
+    /// The byte span of this node in the source file.
     pub span: Span,
     /// The syntactic construct represented by this node.
     pub kind: AstKind,
 }
 
 impl AstNode {
+    /// Creates a new AST node with the given span and kind.
     fn new(span: Span, kind: AstKind) -> Self {
         Self { span, kind }
     }
@@ -79,18 +83,26 @@ pub enum AstKind {
 }
 
 /// Builds an [`AstNode`] from a stream of [`Token`]s.
+///
+/// The parser uses recursive descent with operator precedence parsing
+/// to handle the language's grammar.
 pub struct Parser {
+    /// The token stream to parse.
     tokens: Vec<Token>,
+    /// The current position in the token stream.
     cursor: usize,
 }
 
 impl Parser {
-    /// Creates a parser ready to consume `tokens`.
+    /// Creates a parser ready to consume the given `tokens`.
     pub fn new(tokens: Vec<Token>) -> Self {
         Self { tokens, cursor: 0 }
     }
 
-    /// Parses the token stream into an AST, emitting errors into `sink`.
+    /// Parses the token stream into an abstract syntax tree.
+    ///
+    /// Returns `Some(AstNode)` containing the parsed program, or `None` if
+    /// parsing failed completely.
     ///
     /// Parsing continues after malformed statements where possible, allowing
     /// callers to report more than one syntax error in a single pass.
@@ -135,6 +147,10 @@ impl Parser {
         ))
     }
 
+    /// Parses a single statement from the token stream.
+    ///
+    /// A statement can be a declaration (`let x = 5;`), an assignment (`x = 5;`),
+    /// an expression statement (`x + 5;`), or a block (`{ ... }`).
     fn parse_statement(&mut self, sink: &mut DiagnosticSink) -> Option<AstNode> {
         // Until keywords have their own token kinds, `let name = value` is
         // identified by its unambiguous token shape.
@@ -172,6 +188,11 @@ impl Parser {
         }
     }
 
+    /// Parses an expression with operator precedence parsing.
+    ///
+    /// Uses the Pratt parsing algorithm to handle operator precedence and
+    /// associativity correctly. The `minimum_precedence` parameter ensures
+    /// that operators with lower precedence are not parsed in this context.
     fn parse_expression(
         &mut self,
         minimum_precedence: u8,
@@ -203,6 +224,7 @@ impl Parser {
         Some(left)
     }
 
+    /// Parses a unary operator expression (e.g., `-x`, `!true`).
     fn parse_unary(&mut self, sink: &mut DiagnosticSink) -> Option<AstNode> {
         if let Some(operator) = self.prefix_operator() {
             let start = self.advance().span.start;
@@ -219,6 +241,10 @@ impl Parser {
         self.parse_primary(sink)
     }
 
+    /// Parses a primary expression (the atomic elements of expressions).
+    ///
+    /// A primary can be a literal, an identifier, a parenthesized expression,
+    /// or a block.
     fn parse_primary(&mut self, sink: &mut DiagnosticSink) -> Option<AstNode> {
         let token = *self.tokens.get(self.cursor)?;
         match token.kind {
@@ -258,6 +284,9 @@ impl Parser {
         }
     }
 
+    /// Parses a block statement (`{ ... }`).
+    ///
+    /// A block introduces a new lexical scope and contains zero or more statements.
     fn parse_block(&mut self, sink: &mut DiagnosticSink) -> Option<AstNode> {
         let start = self.advance().span.start;
         let mut statements = Vec::new();
@@ -295,6 +324,7 @@ impl Parser {
         }
     }
 
+    /// Returns the infix operator at the current position, if any.
     fn infix_operator(&self) -> Option<char> {
         match self.tokens.get(self.cursor).map(|token| token.kind) {
             Some(TokenKind::Punctuation(operator)) if precedence(operator).is_some() => {
@@ -304,6 +334,7 @@ impl Parser {
         }
     }
 
+    /// Returns the prefix operator at the current position, if any.
     fn prefix_operator(&self) -> Option<char> {
         match self.tokens.get(self.cursor).map(|token| token.kind) {
             Some(TokenKind::Punctuation(operator)) if matches!(operator, '+' | '-' | '!') => {
@@ -313,16 +344,22 @@ impl Parser {
         }
     }
 
+    /// Advances the cursor past the current statement for error recovery.
+    ///
+    /// This skips tokens until a statement terminator (`;` or `}`) is found,
+    /// allowing parsing to continue after a syntax error.
     fn recover_statement(&mut self) {
         while !self.at_eof() && !self.check_punctuation(';') && !self.check_punctuation('}') {
             self.advance();
         }
     }
 
+    /// Emits an error diagnostic at the current token position.
     fn error_current(&self, message: &str, sink: &mut DiagnosticSink) {
         sink.emit(Diagnostic::error(message).at(self.current_span()));
     }
 
+    /// Returns the span of the current token, or a zero span if at EOF.
     fn current_span(&self) -> Span {
         self.tokens
             .get(self.cursor)
@@ -330,12 +367,14 @@ impl Parser {
             .map_or(Span::new(0, 0), |token| token.span)
     }
 
+    /// Advances the cursor and returns the current token.
     fn advance(&mut self) -> Token {
         let token = self.tokens[self.cursor];
         self.cursor += 1;
         token
     }
 
+    /// Returns true if the cursor is at the end of the token stream.
     fn at_eof(&self) -> bool {
         matches!(
             self.tokens.get(self.cursor).map(|token| token.kind),
@@ -343,18 +382,22 @@ impl Parser {
         )
     }
 
+    /// Returns true if the current token has the given kind.
     fn check_kind(&self, kind: TokenKind) -> bool {
         self.tokens
             .get(self.cursor)
             .is_some_and(|token| token.kind == kind)
     }
 
+    /// Returns true if the current token is the given punctuation character.
     fn check_punctuation(&self, punctuation: char) -> bool {
         self.tokens
             .get(self.cursor)
             .is_some_and(|token| token.kind == TokenKind::Punctuation(punctuation))
     }
 
+    /// If the current token is the given punctuation, consumes it and returns true.
+    /// Otherwise returns false without consuming.
     fn consume_punctuation(&mut self, punctuation: char) -> bool {
         if self.check_punctuation(punctuation) {
             self.advance();
@@ -364,25 +407,41 @@ impl Parser {
         }
     }
 
+    /// Returns the kind of the token at the given offset from the cursor.
     fn peek_kind(&self, offset: usize) -> Option<TokenKind> {
         self.tokens
             .get(self.cursor + offset)
             .map(|token| token.kind)
     }
 
+    /// Returns true if the token at the given offset is the given punctuation.
     fn peek_is_punctuation(&self, offset: usize, punctuation: char) -> bool {
         self.peek_kind(offset) == Some(TokenKind::Punctuation(punctuation))
     }
 }
 
+/// Operator precedence levels (higher = binds tighter).
+///
+/// These constants are used to determine the order of operations in expressions.
+const PRECEDENCE_OR: u8 = 1;
+const PRECEDENCE_AND: u8 = 2;
+const PRECEDENCE_COMPARISON: u8 = 3;
+const PRECEDENCE_ADDITIVE: u8 = 4;
+const PRECEDENCE_MULTIPLICATIVE: u8 = 5;
+const PRECEDENCE_EXPONENTIATION: u8 = 6;
+
+/// Returns the precedence level of an infix operator.
+///
+/// Returns `None` for characters that are not valid infix operators.
+/// Higher values indicate tighter binding (evaluated first).
 fn precedence(operator: char) -> Option<u8> {
     match operator {
-        '|' => Some(1),
-        '&' => Some(2),
-        '<' | '>' => Some(3),
-        '+' | '-' => Some(4),
-        '*' | '/' | '%' => Some(5),
-        '^' => Some(6),
+        '|' => Some(PRECEDENCE_OR),
+        '&' => Some(PRECEDENCE_AND),
+        '<' | '>' => Some(PRECEDENCE_COMPARISON),
+        '+' | '-' => Some(PRECEDENCE_ADDITIVE),
+        '*' | '/' | '%' => Some(PRECEDENCE_MULTIPLICATIVE),
+        '^' => Some(PRECEDENCE_EXPONENTIATION),
         _ => None,
     }
 }
