@@ -251,7 +251,7 @@ mod tests {
         assert_eq!(
             kinds,
             vec![
-                TokenKind::Ident,
+                TokenKind::Keyword(Keyword::Let),
                 TokenKind::Punctuation('='),
                 TokenKind::Integer,
                 TokenKind::Punctuation(';'),
@@ -271,7 +271,7 @@ mod tests {
         assert_eq!(
             kinds,
             vec![
-                TokenKind::Ident,
+                TokenKind::Keyword(Keyword::Let),
                 TokenKind::Ident,
                 TokenKind::Punctuation('='),
                 TokenKind::Integer,
