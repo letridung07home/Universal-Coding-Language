@@ -46,28 +46,24 @@ Use `cargo run -- --help` to display command-line help.
 
 - Rust stable with Cargo (see `rust-toolchain.toml`)
 
-## Build and test
+## Build and run
 
 ```sh
 cargo build
-cargo test --all-features
 cargo run -- example.ucl
 cargo build --release --locked
 ```
 
-Before submitting a change, run the same core checks as CI:
-
-```sh
-cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-features
-```
+See the [development guide](docs/development.md) for testing, linting,
+architecture, and contribution instructions.
 
 ## Repository layout
 
 ```text
 .
 ├── docs/
+│   ├── development.md   # Development workflow and contribution guide
+│   ├── roadmap.md       # Planned milestones and project direction
 │   └── spec.md          # Implemented language syntax and semantics
 ├── src/
 │   ├── main.rs          # `ucl` CLI
@@ -85,48 +81,14 @@ cargo test --all-features
 
 ## Roadmap
 
-The roadmap prioritizes correctness and a stable language foundation before
-adding major features.
-
-### Near term: correctness and resilience
-
-- [ ] Recognize `let` as an actual keyword instead of accepting any identifier
-      in the declaration position
-- [ ] Stop evaluation when lexing or parsing reports errors
-- [ ] Make evaluator failures explicit rather than representing them as `unit`
-- [ ] Validate source spans and prevent invalid public spans from panicking
-- [ ] Add regression tests for overflow, malformed syntax, UTF-8 diagnostics,
-      nested scopes, and CLI argument handling
-- [ ] Add parser and evaluator nesting limits
-
-### Language foundation
-
-- [ ] Define keyword, assignment, operator, and runtime-error semantics
-- [ ] Decide whether UCL will be statically or dynamically typed
-- [ ] Add boolean literals and equality operators
-- [ ] Add strings and string operations
-- [ ] Add functions, parameters, return values, and closures
-- [ ] Add conditional and looping constructs
-
-### Tooling and ecosystem
-
-- [ ] Add property tests and fuzz targets for the lexer and parser
-- [ ] Publish diagnostic and compatibility guarantees
-- [ ] Design a module and package system
-- [ ] Add an interactive REPL
-- [ ] Provide release artifacts and installation instructions
-
-Completed foundation work includes the initial specification, lexer, parser,
-evaluator, CLI, diagnostics renderer, integration tests, and CI checks.
+Current priorities are interpreter correctness, stable language semantics, and
+stronger testing. See the [project roadmap](docs/roadmap.md) for planned
+milestones.
 
 ## Contributing
 
-Bug reports and focused pull requests are welcome. Please keep changes aligned
-with the implemented specification, include tests for behavioral changes, and
-run the formatting, lint, and test commands above.
-
-For language changes, update `docs/spec.md` in the same pull request so the
-implementation and specification remain synchronized.
+See the [development guide](docs/development.md) for the local workflow,
+architecture overview, testing requirements, and contribution guidance.
 
 ## License
 
