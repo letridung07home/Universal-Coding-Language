@@ -5,6 +5,9 @@ edition = "2024"
 description = "A universal coding language that excels in every task possible"
 repository = "https://github.com/letridung07home/Universal-Coding-Language.git"
 readme = "README.md"
+license = "MIT OR Apache-2.0"
+keywords = ["language", "interpreter", "compiler"]
+categories = ["compilers"]
 
 [lib]
 name = "ucl"
