@@ -28,6 +28,16 @@ use crate::diagnostic::{Diagnostic, DiagnosticSink};
 use crate::parser::{AstKind, AstNode};
 use crate::source::{SourceFile, Span};
 
+/// The maximum evaluation-nesting depth allowed before an error is reported.
+///
+/// This guards against deeply nested ASTs constructed through the public API
+/// that would otherwise overflow the call stack during recursive evaluation.
+/// It is deliberately larger than the parser's own nesting limit: AST wrappers
+/// such as `let`, assignment, and binary operators add evaluator depth without
+/// adding parser nesting, so a program the parser accepts must never be
+/// rejected here.
+const MAX_EVAL_DEPTH: usize = 1024;
+
 /// A runtime value produced by evaluating a program.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
@@ -159,7 +169,7 @@ impl Evaluator {
     ) -> Value {
         let mut environment = Environment::default();
         environment.push_scope();
-        self.eval(root, source, &mut environment, sink)
+        self.eval(root, source, &mut environment, sink, 0)
     }
 
     /// Internal evaluation function that walks the AST.
@@ -172,12 +182,18 @@ impl Evaluator {
         source: &SourceFile,
         environment: &mut Environment,
         sink: &mut DiagnosticSink,
+        depth: usize,
     ) -> Value {
+        if depth >= MAX_EVAL_DEPTH {
+            sink.emit(Diagnostic::error("evaluation nesting is too deep").at(node.span));
+            return Value::Unit;
+        }
+
         match &node.kind {
             AstKind::Program { statements } => {
                 let mut last = Value::Unit;
                 for statement in statements {
-                    last = self.eval(statement, source, environment, sink);
+                    last = self.eval(statement, source, environment, sink, depth + 1);
                 }
                 last
             }
@@ -185,14 +201,14 @@ impl Evaluator {
                 environment.push_scope();
                 let mut last = Value::Unit;
                 for statement in statements {
-                    last = self.eval(statement, source, environment, sink);
+                    last = self.eval(statement, source, environment, sink, depth + 1);
                 }
                 environment.pop_scope();
                 last
             }
             AstKind::Let { name, value, .. } => {
                 let name = source.slice(*name).expect("declaration name span is valid");
-                let value = self.eval(value, source, environment, sink);
+                let value = self.eval(value, source, environment, sink, depth + 1);
                 environment.define(name, value);
                 Value::Unit
             }
@@ -223,9 +239,11 @@ impl Evaluator {
                     }
                 }
             }
-            AstKind::Group { expression } => self.eval(expression, source, environment, sink),
+            AstKind::Group { expression } => {
+                self.eval(expression, source, environment, sink, depth + 1)
+            }
             AstKind::Unary { operator, operand } => {
-                let operand = self.eval(operand, source, environment, sink);
+                let operand = self.eval(operand, source, environment, sink, depth + 1);
                 self.eval_unary(*operator, operand, node.span, sink)
             }
             AstKind::Binary {
@@ -233,8 +251,8 @@ impl Evaluator {
                 left,
                 right,
             } => {
-                let left = self.eval(left, source, environment, sink);
-                let right = self.eval(right, source, environment, sink);
+                let left = self.eval(left, source, environment, sink, depth + 1);
+                let right = self.eval(right, source, environment, sink, depth + 1);
                 self.eval_binary(*operator, left, right, node.span, sink)
             }
             AstKind::Assignment { target, value } => {
@@ -247,7 +265,7 @@ impl Evaluator {
                         return Value::Unit;
                     }
                 };
-                let value = self.eval(value, source, environment, sink);
+                let value = self.eval(value, source, environment, sink, depth + 1);
                 if !environment.assign(name, value.clone()) {
                     sink.emit(
                         Diagnostic::error(format!("cannot assign to undefined variable `{name}`"))
@@ -532,6 +550,40 @@ mod tests {
                 "expected an overflow error for `{source}`"
             );
         }
+    }
+
+    #[test]
+    fn rejects_excessive_evaluation_nesting() {
+        // Build a deeply nested AST directly, bypassing the parser's own depth
+        // limit, to exercise the evaluator's independent guard.
+        let mut node = AstNode {
+            span: Span::new(0, 1),
+            kind: AstKind::Integer,
+        };
+        for _ in 0..(MAX_EVAL_DEPTH + 100) {
+            node = AstNode {
+                span: Span::new(0, 1),
+                kind: AstKind::Group {
+                    expression: Box::new(node),
+                },
+            };
+        }
+        let program = AstNode {
+            span: Span::new(0, 1),
+            kind: AstKind::Program {
+                statements: vec![node],
+            },
+        };
+        let source = SourceFile::new("test.ucl", "1");
+        let mut sink = DiagnosticSink::new();
+
+        let _ = Evaluator::new().evaluate(&program, &source, &mut sink);
+
+        assert!(sink.has_errors());
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("nesting is too deep"))
+        );
     }
 
     #[test]
