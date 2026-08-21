@@ -191,26 +191,27 @@ impl Evaluator {
                 last
             }
             AstKind::Let { name, value, .. } => {
-                let name = source.slice(*name);
+                let name = source.slice(*name).expect("declaration name span is valid");
                 let value = self.eval(value, source, environment, sink);
                 environment.define(name, value);
                 Value::Unit
             }
-            AstKind::Identifier => match environment.lookup(source.slice(node.span)) {
-                Some(value) => value.clone(),
-                None => {
-                    sink.emit(
-                        Diagnostic::error(format!(
-                            "undefined variable `{}`",
-                            source.slice(node.span)
-                        ))
-                        .at(node.span),
-                    );
-                    Value::Unit
+            AstKind::Identifier => {
+                let name = source.slice(node.span).expect("identifier span is valid");
+                match environment.lookup(name) {
+                    Some(value) => value.clone(),
+                    None => {
+                        sink.emit(
+                            Diagnostic::error(format!("undefined variable `{name}`")).at(node.span),
+                        );
+                        Value::Unit
+                    }
                 }
-            },
+            }
             AstKind::Integer => {
-                let text = source.slice(node.span);
+                let text = source
+                    .slice(node.span)
+                    .expect("integer literal span is valid");
                 match text.parse::<i64>() {
                     Ok(value) => Value::Integer(value),
                     Err(_) => {
@@ -238,7 +239,9 @@ impl Evaluator {
             }
             AstKind::Assignment { target, value } => {
                 let name = match &target.kind {
-                    AstKind::Identifier => source.slice(target.span),
+                    AstKind::Identifier => source
+                        .slice(target.span)
+                        .expect("assignment target span is valid"),
                     _ => {
                         sink.emit(Diagnostic::error("invalid assignment target").at(target.span));
                         return Value::Unit;
@@ -317,10 +320,27 @@ impl Evaluator {
                         );
                         Value::Unit
                     }
-                    '^' => match a.checked_pow(b as u32) {
-                        Some(power) => Value::Integer(power),
-                        None => overflow(span, sink),
-                    },
+                    '^' => {
+                        let exponent = match u32::try_from(b) {
+                            Ok(exponent) => exponent,
+                            // The exponent exceeds `u32::MAX`. Only the bases
+                            // 0, 1, and -1 can produce an in-range result from
+                            // such an exponent; every other base overflows the
+                            // signed 64-bit range.
+                            Err(_) => {
+                                return match a {
+                                    0 => Value::Integer(0),
+                                    1 => Value::Integer(1),
+                                    -1 => Value::Integer(if b % 2 == 0 { 1 } else { -1 }),
+                                    _ => overflow(span, sink),
+                                };
+                            }
+                        };
+                        match a.checked_pow(exponent) {
+                            Some(power) => Value::Integer(power),
+                            None => overflow(span, sink),
+                        }
+                    }
                     _ => unreachable!("`operator` is restricted to arithmetic operators"),
                 }
             }
@@ -496,5 +516,42 @@ mod tests {
             sink.iter()
                 .any(|diagnostic| diagnostic.message.contains("division by zero"))
         );
+    }
+
+    #[test]
+    fn rejects_exponents_above_the_u32_range() {
+        // These exponents overflow i64, but they must be reported as overflow
+        // rather than silently truncated (`4294967296 as u32 == 0`), which
+        // would wrongly evaluate `2 ^ 4294967296` as `2 ^ 0 == 1`.
+        for source in ["2 ^ 4294967296;", "2 ^ 4294967297;"] {
+            let (_value, sink) = eval(source);
+            assert!(sink.has_errors(), "expected an error for `{source}`");
+            assert!(
+                sink.iter()
+                    .any(|diagnostic| diagnostic.message.contains("overflow")),
+                "expected an overflow error for `{source}`"
+            );
+        }
+    }
+
+    #[test]
+    fn computes_unit_bases_with_oversized_exponents() {
+        // Bases whose powers never overflow produce exact results even when
+        // the exponent is too large to represent as a `u32`.
+        let (value, sink) = eval("0 ^ 4294967296;");
+        assert!(!sink.has_errors());
+        assert_eq!(value, Value::Integer(0));
+
+        let (value, sink) = eval("1 ^ 4294967296;");
+        assert!(!sink.has_errors());
+        assert_eq!(value, Value::Integer(1));
+
+        let (value, sink) = eval("-1 ^ 4294967296;");
+        assert!(!sink.has_errors());
+        assert_eq!(value, Value::Integer(1));
+
+        let (value, sink) = eval("-1 ^ 4294967297;");
+        assert!(!sink.has_errors());
+        assert_eq!(value, Value::Integer(-1));
     }
 }

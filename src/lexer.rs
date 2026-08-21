@@ -149,7 +149,9 @@ mod tests {
 
     /// Extracts the source text covered by a token's span.
     fn lexeme<'src>(source: &'src SourceFile, token: &Token) -> &'src str {
-        source.slice(token.span)
+        source
+            .slice(token.span)
+            .expect("token spans are always valid")
     }
 
     #[test]
