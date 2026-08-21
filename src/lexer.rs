@@ -7,29 +7,38 @@ use crate::source::{SourceFile, Span};
 ///
 /// This vocabulary is intentionally small for now and will grow as the
 /// language specification is written.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TokenKind {
-    /// An identifier or keyword: `foo`, `let`, `if`, ...
+    /// An identifier or keyword: `foo`, `let`, `if`, etc.
+    ///
+    /// Note: The lexer does not distinguish between keywords and identifiers;
+    /// the parser recognizes keyword patterns from the token stream.
     Ident,
-    /// An integer literal: `42`.
+    /// An integer literal: `42`, `123`, etc.
     Integer,
-    /// A punctuation character: `(`, `)`, `{`, `}`, ...
+    /// A punctuation character: `(`, `)`, `{`, `}`, `+`, `-`, etc.
     Punctuation(char),
-    /// End of input.
+    /// End of input marker.
+    ///
+    /// Always appears as the last token in the stream.
     Eof,
 }
 
 /// A token produced by the [`Lexer`], tagged with its source [`Span`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Token {
-    /// The kind of token.
+    /// The kind of token (identifier, integer, punctuation, etc.).
     pub kind: TokenKind,
-    /// Where in the source this token appears.
+    /// The byte span of this token in the source file.
     pub span: Span,
 }
 
 /// Converts source text into a vector of [`Token`]s.
+///
+/// The lexer performs lexical analysis, breaking source text into tokens
+/// that the parser can use to build an abstract syntax tree.
 pub struct Lexer<'src> {
+    /// The source file being tokenized.
     source: &'src SourceFile,
 }
 
@@ -39,11 +48,12 @@ impl<'src> Lexer<'src> {
         Self { source }
     }
 
-    /// Runs the lexer, emitting any errors into `sink`.
+    /// Tokenizes the source file into a vector of tokens.
     ///
     /// The returned vector always ends with a [`TokenKind::Eof`] token whose
     /// span points one byte past the last byte of the source. On an unknown
-    /// character, an error diagnostic is emitted and scanning continues.
+    /// character, an error diagnostic is emitted and scanning continues
+    /// to allow reporting multiple lexical errors.
     pub fn tokenize(&self, sink: &mut DiagnosticSink) -> Vec<Token> {
         let contents = self.source.contents();
         let bytes = contents.as_bytes();
@@ -139,7 +149,7 @@ mod tests {
 
     /// Extracts the source text covered by a token's span.
     fn lexeme<'src>(source: &'src SourceFile, token: &Token) -> &'src str {
-        &source.contents()[token.span.start..token.span.end]
+        source.slice(token.span)
     }
 
     #[test]

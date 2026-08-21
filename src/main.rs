@@ -1,4 +1,8 @@
 //! Command-line entry point for the `ucl` binary.
+//!
+//! This module provides the CLI interface for evaluating UCL source files.
+//! It orchestrates the compiler pipeline (lexer → parser → evaluator)
+//! and handles diagnostic formatting and output.
 
 use std::env;
 use std::fs;

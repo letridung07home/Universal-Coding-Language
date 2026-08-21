@@ -10,6 +10,17 @@
 //! - Integers: `+`, `-`, `*`, `/`, `%`, and `^` (exponentiation).
 //! - Comparison: `<` and `>` on integers, producing booleans.
 //! - Booleans: unary `!`, and infix `&` (and) / `|` (or).
+//!
+//! ## Error Handling
+//!
+//! The evaluator follows a "collect all errors" strategy:
+//! - Errors are emitted to the `DiagnosticSink` but do not stop execution
+//! - Evaluation continues to report multiple errors in a single pass
+//! - The final value is the result of the last successfully evaluated statement
+//! - Callers should check `sink.has_errors()` to determine if execution succeeded
+//!
+//! This design allows users to see all errors in their program at once,
+//! similar to how compilers like rustc operate.
 
 use std::collections::HashMap;
 
@@ -21,17 +32,20 @@ use crate::source::{SourceFile, Span};
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
     /// No value (unit).
+    ///
+    /// This is the result of declarations and other statements that don't
+    /// produce a value.
     Unit,
-    /// A signed integer.
+    /// A signed 64-bit integer.
     Integer(i64),
-    /// A boolean.
+    /// A boolean value (`true` or `false`).
     Boolean(bool),
     // TODO: strings, functions, and the rest of the type system, once the
     // lexer and parser gain syntax for them.
 }
 
 impl Value {
-    /// The value's short type name, used in diagnostics.
+    /// Returns the value's short type name, used in diagnostics.
     fn type_name(&self) -> &'static str {
         match self {
             Value::Unit => "unit",
@@ -45,21 +59,30 @@ impl Value {
 ///
 /// Lookups walk the stack from the innermost scope outward, so a block can
 /// shadow an outer binding while leaving the outer binding intact.
+///
+/// This struct is not exposed publicly; it is an internal implementation detail
+/// of the [`Evaluator`].
 #[derive(Default)]
 struct Environment {
+    /// The stack of scopes, with the innermost (most recent) scope at the end.
     scopes: Vec<HashMap<String, Value>>,
 }
 
 impl Environment {
+    /// Pushes a new, empty scope onto the stack.
     fn push_scope(&mut self) {
         self.scopes.push(HashMap::new());
     }
 
+    /// Pops the innermost scope from the stack.
     fn pop_scope(&mut self) {
         self.scopes.pop();
     }
 
     /// Binds `name` to `value` in the innermost scope.
+    ///
+    /// If a binding with the same name already exists in the innermost scope,
+    /// it is shadowed (replaced) by the new binding.
     fn define(&mut self, name: &str, value: Value) {
         self.scopes
             .last_mut()
@@ -68,11 +91,17 @@ impl Environment {
     }
 
     /// Looks up `name`, searching scopes from innermost outward.
+    ///
+    /// Returns the first binding found, or `None` if no binding exists.
     fn lookup(&self, name: &str) -> Option<&Value> {
         self.scopes.iter().rev().find_map(|scope| scope.get(name))
     }
 
     /// Reassigns an existing binding. Returns `false` if `name` is unbound.
+    ///
+    /// The assignment searches scopes from innermost to outermost and updates
+    /// the first binding found. This allows shadowed bindings to be updated
+    /// correctly.
     fn assign(&mut self, name: &str, value: Value) -> bool {
         for scope in self.scopes.iter_mut().rev() {
             if let Some(slot) = scope.get_mut(name) {
@@ -85,19 +114,43 @@ impl Environment {
 }
 
 /// Walks an [`AstNode`] and computes a [`Value`].
+///
+/// The evaluator implements the semantic rules of the UCL language,
+/// executing the abstract syntax tree to produce runtime values.
 pub struct Evaluator;
 
 impl Evaluator {
-    /// Creates an evaluator.
+    /// Creates a new evaluator instance.
+    ///
+    /// The evaluator is stateless, so a single instance can be reused
+    /// to evaluate multiple ASTs.
     pub fn new() -> Self {
         Self
     }
 
-    /// Evaluates `root` to a value, emitting errors into `sink`.
+    /// Evaluates the given AST to produce a value.
     ///
     /// `source` provides the text that the AST's spans point into. The result
     /// is the value of the program's last statement, or [`Value::Unit`] if the
-    /// program is empty or an error occurred.
+    /// program is empty.
+    ///
+    /// # Error Handling
+    ///
+    /// Even if errors occur during evaluation, this method returns a value
+    /// (typically the last successfully computed value). Callers should check
+    /// `sink.has_errors()` to determine if evaluation succeeded without errors.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let source = SourceFile::new("example.ucl", "2 + 3 * 4");
+    /// let mut sink = DiagnosticSink::new();
+    /// let ast = /* parse the source */;
+    /// let value = Evaluator::new().evaluate(&ast, &source, &mut sink);
+    /// if sink.has_errors() {
+    ///     // Handle errors
+    /// }
+    /// ```
     pub fn evaluate(
         &self,
         root: &AstNode,
@@ -109,6 +162,10 @@ impl Evaluator {
         self.eval(root, source, &mut environment, sink)
     }
 
+    /// Internal evaluation function that walks the AST.
+    ///
+    /// This recursively evaluates nodes and returns their values.
+    /// Errors are emitted to the sink but do not stop evaluation.
     fn eval(
         &self,
         node: &AstNode,
@@ -134,18 +191,18 @@ impl Evaluator {
                 last
             }
             AstKind::Let { name, value, .. } => {
-                let name = lexeme(source, *name);
+                let name = source.slice(*name);
                 let value = self.eval(value, source, environment, sink);
                 environment.define(name, value);
                 Value::Unit
             }
-            AstKind::Identifier => match environment.lookup(lexeme(source, node.span)) {
+            AstKind::Identifier => match environment.lookup(source.slice(node.span)) {
                 Some(value) => value.clone(),
                 None => {
                     sink.emit(
                         Diagnostic::error(format!(
                             "undefined variable `{}`",
-                            lexeme(source, node.span)
+                            source.slice(node.span)
                         ))
                         .at(node.span),
                     );
@@ -153,7 +210,7 @@ impl Evaluator {
                 }
             },
             AstKind::Integer => {
-                let text = lexeme(source, node.span);
+                let text = source.slice(node.span);
                 match text.parse::<i64>() {
                     Ok(value) => Value::Integer(value),
                     Err(_) => {
@@ -181,7 +238,7 @@ impl Evaluator {
             }
             AstKind::Assignment { target, value } => {
                 let name = match &target.kind {
-                    AstKind::Identifier => lexeme(source, target.span),
+                    AstKind::Identifier => source.slice(target.span),
                     _ => {
                         sink.emit(Diagnostic::error("invalid assignment target").at(target.span));
                         return Value::Unit;
@@ -295,11 +352,9 @@ impl Default for Evaluator {
     }
 }
 
-/// Extracts the source text covered by `span`.
-fn lexeme(source: &SourceFile, span: Span) -> &str {
-    &source.contents()[span.start..span.end]
-}
-
+/// Emits a type error for a unary operator and returns [`Value::Unit`].
+///
+/// This is used when a unary operator is applied to an operand of the wrong type.
 fn unary_type_error(
     operator: char,
     operand: &Value,
@@ -316,6 +371,9 @@ fn unary_type_error(
     Value::Unit
 }
 
+/// Emits a type error for a binary operator and returns [`Value::Unit`].
+///
+/// This is used when a binary operator is applied to operands of the wrong types.
 fn binary_type_error(
     operator: char,
     left: &Value,
@@ -334,11 +392,13 @@ fn binary_type_error(
     Value::Unit
 }
 
+/// Emits a division by zero error and returns [`Value::Unit`].
 fn division_by_zero(span: Span, sink: &mut DiagnosticSink) -> Value {
     sink.emit(Diagnostic::error("division by zero").at(span));
     Value::Unit
 }
 
+/// Emits an integer overflow error and returns [`Value::Unit`].
 fn overflow(span: Span, sink: &mut DiagnosticSink) -> Value {
     sink.emit(Diagnostic::error("integer overflow").at(span));
     Value::Unit
