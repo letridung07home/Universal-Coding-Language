@@ -2,6 +2,29 @@
 
 All notable changes to UCL are documented here.
 
+## 0.3.0 - 2026-08-22
+
+### Added
+
+- String literals (`"hello"`) with the escape sequences `\n`, `\t`, `\\`,
+  and `\"`. Unterminated literals, raw newlines inside strings, and unknown
+  escape sequences are errors.
+- String concatenation with `+` and equality comparison (`==`, `!=`) of two
+  strings. Mixing strings with other operand types is an error, consistent
+  with existing operator strictness.
+- Conditional expressions: `if condition { ... } else { ... }`. Parentheses
+  around the condition are optional; `else if` chains are supported. The
+  expression evaluates to the value of the taken branch (or `unit` when the
+  condition is false and no `else` is present). Only the taken branch runs.
+- `while` loops as statements, evaluating to `unit`. The body runs in its own
+  lexical scope.
+- A loop-iteration cap (100,000 iterations per `while` loop): a condition
+  that never becomes false aborts the loop with an error instead of hanging
+  the interpreter.
+- New reserved keywords: `if`, `else`, `while`.
+- **Breaking (library API):** new `Value::Str(String)` variant and new AST
+  kinds `AstKind::StringLiteral`, `AstKind::If`, and `AstKind::While`.
+
 ## 0.2.0 - 2026-08-22
 
 ### Added

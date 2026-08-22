@@ -52,6 +52,12 @@ pub enum AstKind {
         /// The literal's value.
         bool,
     ),
+    /// A string literal, such as `"hello"`.
+    ///
+    /// The node's span covers the entire lexeme including the surrounding
+    /// quotes; the decoded contents are recovered from the source text via
+    /// [`crate::lexer::unescape_string`] at evaluation time.
+    StringLiteral,
     /// An identifier reference.
     Identifier,
     /// A parenthesized expression.
@@ -86,6 +92,25 @@ pub enum AstKind {
         target: Box<AstNode>,
         /// The assigned expression.
         value: Box<AstNode>,
+    },
+    /// A conditional expression: `if condition { ... } else { ... }`.
+    ///
+    /// The value of the expression is the value of whichever branch runs;
+    /// a missing `else` branch contributes [`unit`](Value::Unit) semantics.
+    If {
+        /// The condition; it must evaluate to a boolean.
+        condition: Box<AstNode>,
+        /// The block evaluated when the condition is true.
+        then_branch: Box<AstNode>,
+        /// The block (or nested `if`) evaluated otherwise.
+        else_branch: Option<Box<AstNode>>,
+    },
+    /// A loop statement: `while condition { ... }`.
+    While {
+        /// The condition checked before each iteration; must be a boolean.
+        condition: Box<AstNode>,
+        /// The block evaluated once per iteration.
+        body: Box<AstNode>,
     },
 }
 
@@ -249,6 +274,12 @@ impl Parser {
             ));
         }
 
+        // A `while` loop is a statement, not an expression: it evaluates to
+        // unit and may not appear inside a larger expression.
+        if self.check_keyword(Keyword::While) {
+            return self.parse_while(sink);
+        }
+
         let target = self.parse_expression(0, sink)?;
         if self.consume_punctuation('=') {
             let value = self.parse_expression(0, sink)?;
@@ -349,6 +380,11 @@ impl Parser {
                 let value = token.kind == TokenKind::Keyword(Keyword::True);
                 Some(AstNode::new(token.span, AstKind::BooleanLiteral(value)))
             }
+            TokenKind::Keyword(Keyword::If) => self.parse_if(sink),
+            TokenKind::StringLiteral => {
+                self.advance();
+                Some(AstNode::new(token.span, AstKind::StringLiteral))
+            }
             TokenKind::Ident => {
                 self.advance();
                 Some(AstNode::new(token.span, AstKind::Identifier))
@@ -379,6 +415,76 @@ impl Parser {
                 None
             }
         }
+    }
+
+    /// Parses an `if` expression: `if condition { ... } [else { ... | if ... }]`.
+    ///
+    /// Parentheses around the condition are optional. The `else` branch may
+    /// be a block or a nested `if`, allowing `else if` chains.
+    fn parse_if(&mut self, sink: &mut DiagnosticSink) -> Option<AstNode> {
+        // Each nested `else if` adds a stack frame that the expression
+        // nesting counter would not see, so track depth here as well to
+        // bound pathological chains.
+        self.depth += 1;
+        if self.depth > MAX_NESTING_DEPTH {
+            self.depth -= 1;
+            self.error_current("expression nesting is too deep", sink);
+            return None;
+        }
+
+        let result = self.parse_if_inner(sink);
+        self.depth -= 1;
+        result
+    }
+
+    /// The body of [`Parser::parse_if`], run under its depth guard.
+    fn parse_if_inner(&mut self, sink: &mut DiagnosticSink) -> Option<AstNode> {
+        let start = self.advance().span.start;
+
+        let condition = self.parse_expression(0, sink)?;
+        let then_branch = self.parse_block(sink)?;
+
+        let else_branch = if self.check_keyword(Keyword::Else) {
+            self.advance();
+            let branch = if self.check_keyword(Keyword::If) {
+                self.parse_if(sink)?
+            } else {
+                self.parse_block(sink)?
+            };
+            Some(Box::new(branch))
+        } else {
+            None
+        };
+
+        let end = else_branch
+            .as_ref()
+            .map_or(then_branch.span.end, |branch| branch.span.end);
+        Some(AstNode::new(
+            Span::new(start, end),
+            AstKind::If {
+                condition: Box::new(condition),
+                then_branch: Box::new(then_branch),
+                else_branch,
+            },
+        ))
+    }
+
+    /// Parses a `while` statement: `while condition { ... }`.
+    ///
+    /// Parentheses around the condition are optional.
+    fn parse_while(&mut self, sink: &mut DiagnosticSink) -> Option<AstNode> {
+        let start = self.advance().span.start;
+
+        let condition = self.parse_expression(0, sink)?;
+        let body = self.parse_block(sink)?;
+
+        Some(AstNode::new(
+            Span::new(start, body.span.end),
+            AstKind::While {
+                condition: Box::new(condition),
+                body: Box::new(body),
+            },
+        ))
     }
 
     /// Parses a block statement (`{ ... }`).
@@ -807,5 +913,116 @@ mod tests {
             statements[0].kind,
             AstKind::Unary { operator: '-', .. }
         ));
+    }
+
+    #[test]
+    fn parses_string_literals() {
+        let (ast, sink) = parse("\"hello\";");
+
+        assert!(!sink.has_errors());
+        let AstKind::Program { statements } = ast.kind else {
+            panic!("expected program")
+        };
+        assert_eq!(statements[0].kind, AstKind::StringLiteral);
+    }
+
+    #[test]
+    fn parses_if_with_optional_parentheses_and_else() {
+        for source in ["if x { 1; } else { 2; };", "if (x) { 1; } else { 2; };"] {
+            let (ast, sink) = parse(source);
+
+            assert!(!sink.has_errors(), "for `{source}`");
+            let AstKind::Program { statements } = ast.kind else {
+                panic!("expected program")
+            };
+            let AstKind::If {
+                condition,
+                then_branch,
+                else_branch: Some(else_branch),
+            } = &statements[0].kind
+            else {
+                panic!("expected an if expression for `{source}`")
+            };
+            assert!(
+                matches!(condition.kind, AstKind::Identifier | AstKind::Group { .. }),
+                "for `{source}`"
+            );
+            assert!(matches!(then_branch.kind, AstKind::Block { .. }));
+            assert!(matches!(else_branch.kind, AstKind::Block { .. }));
+        }
+    }
+
+    #[test]
+    fn an_if_without_else_parses_with_no_else_branch() {
+        let (ast, sink) = parse("if x > 0 { x; };");
+
+        assert!(!sink.has_errors());
+        let AstKind::Program { statements } = ast.kind else {
+            panic!("expected program")
+        };
+        let AstKind::If { else_branch, .. } = &statements[0].kind else {
+            panic!("expected an if expression")
+        };
+        assert!(else_branch.is_none());
+    }
+
+    #[test]
+    fn parses_else_if_chains_as_nested_conditionals() {
+        let (ast, sink) = parse("if a { 1; } else if b { 2; } else { 3; };");
+
+        assert!(!sink.has_errors());
+        let AstKind::Program { statements } = ast.kind else {
+            panic!("expected program")
+        };
+        let AstKind::If {
+            else_branch: Some(outer),
+            ..
+        } = &statements[0].kind
+        else {
+            panic!("expected an if expression")
+        };
+        assert!(
+            matches!(outer.kind, AstKind::If { .. }),
+            "an `else if` must nest a conditional"
+        );
+    }
+
+    #[test]
+    fn parses_while_statements() {
+        let (ast, sink) = parse("while x < 10 { x = x + 1; };");
+
+        assert!(!sink.has_errors());
+        let AstKind::Program { statements } = ast.kind else {
+            panic!("expected program")
+        };
+        let AstKind::While { condition, body } = &statements[0].kind else {
+            panic!("expected a while statement")
+        };
+        assert!(matches!(
+            condition.kind,
+            AstKind::Binary {
+                operator: BinaryOperator::Less,
+                ..
+            }
+        ));
+        assert!(matches!(body.kind, AstKind::Block { .. }));
+    }
+
+    #[test]
+    fn while_is_not_an_expression_operand() {
+        let (_ast, sink) = parse("1 + while x { 2; };");
+
+        assert!(sink.has_errors());
+    }
+
+    #[test]
+    fn reports_a_missing_block_after_if() {
+        let (_ast, sink) = parse("if x 1;");
+
+        assert!(sink.has_errors());
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("expected `}`"))
+        );
     }
 }

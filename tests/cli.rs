@@ -86,6 +86,43 @@ fn prints_nothing_for_unit_results() {
 }
 
 #[test]
+fn prints_string_results_as_their_contents() {
+    let (stdout, stderr, success) = run("\"hello \" + \"world\";");
+    assert!(success, "stderr: {stderr}");
+    assert_eq!(stdout, "hello world\n");
+    assert!(stderr.is_empty());
+}
+
+#[test]
+fn evaluates_if_else_and_while_end_to_end() {
+    let source = "
+        let n = 1;
+        while n < 100 {
+            n = n * 2;
+        };
+        if n == 128 { \"one twenty-eight\"; } else { \"unexpected\"; };
+    ";
+    let (stdout, stderr, success) = run(source);
+    assert!(success, "stderr: {stderr}");
+    assert_eq!(stdout, "one twenty-eight\n");
+    assert!(stderr.is_empty());
+}
+
+#[test]
+fn unterminated_strings_are_reported_with_an_excerpt() {
+    let (_stdout, stderr, success) = run("\"oops");
+    assert!(!success);
+    assert!(stderr.contains("unterminated string literal"));
+}
+
+#[test]
+fn non_boolean_conditions_are_runtime_errors() {
+    let (_stdout, stderr, success) = run("if 1 + 1 { 2; };");
+    assert!(!success);
+    assert!(stderr.contains("condition of `if` must be a boolean"));
+}
+
+#[test]
 fn reports_runtime_errors_with_a_source_excerpt() {
     let (stdout, stderr, success) = run("1 / 0;");
     assert!(!success);

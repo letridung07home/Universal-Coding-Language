@@ -14,9 +14,10 @@ occurred).
 
 The current implementation is intentionally small. It provides:
 
-- three value types: *unit*, *integer*, and *boolean*;
-- integer and boolean operators;
+- four value types: *unit*, *integer*, *boolean*, and *string*;
+- integer, boolean, and string operators;
 - `let` declarations, assignment, blocks, and lexical scoping;
+- conditional expressions (`if`/`else`) and `while` loops;
 - structured diagnostics with source excerpts.
 
 ## 2. Lexical structure
@@ -50,18 +51,33 @@ comment ::= "//" [^\n]*
 identifier ::= [A-Za-z_] [A-Za-z0-9_]*
 ```
 
-Identifiers name bindings. The words `let`, `true`, and `false` are reserved
-keywords: the lexer produces dedicated keyword tokens for them, and they
-cannot be used as identifiers. The parser recognizes declarations from the
-`let` keyword token rather than from the token shape.
+Identifiers name bindings. The words `let`, `true`, `false`, `if`, `else`, and
+`while` are reserved keywords: the lexer produces dedicated keyword tokens for
+them, and they cannot be used as identifiers. The parser recognizes
+declarations from the `let` keyword token rather than from the token shape.
 
-### 2.5 Boolean literals
+### 2.5 String literals
+
+```
+string-literal ::= '"' string-character* '"'
+string-character ::= [^"\n\\] | escape-sequence
+escape-sequence ::= "\\" ("n" | "t" | "\" | "\\")
+```
+
+A string literal is a sequence of Unicode characters between two double
+quotes. A raw newline may not appear inside a string literal, and the literal
+must be terminated on the same line it starts on. Within a string, the escape
+sequences `\n` (newline), `\t` (tab), `\"` (double quote), and `\\`
+(backslash) decode to the corresponding characters; any other escape
+sequence is an error. An unterminated string literal is an error.
+
+### 2.6 Boolean literals
 
 ```
 boolean-literal ::= "true" | "false"
 ```
 
-### 2.6 Integer literals
+### 2.7 Integer literals
 
 ```
 integer-literal ::= [0-9]+
@@ -72,7 +88,7 @@ An integer literal is a non-negative decimal numeral. It must fit in a signed
 written as a unary `-` applied to a positive literal (there is no negative
 literal syntax).
 
-### 2.7 Punctuation
+### 2.8 Punctuation
 
 The characters `( ) { } ; = + - * / % ^ < > & | !` are significant. The
 two-character sequences `<=`, `>=`, `==`, and `!=` are tokenized as single
@@ -81,7 +97,7 @@ punctuation; one that no parser production accepts produces an error at that
 position. The two-character sequence `//` begins a comment (§2.3) and is not
 tokenized as punctuation.
 
-### 2.8 Unrecognized characters
+### 2.9 Unrecognized characters
 
 A non-ASCII character (or any character not covered above) is reported as an
 error and skipped, so scanning continues after it.
@@ -93,8 +109,9 @@ error and skipped, so scanning continues after it.
 | `unit`  | A single value with no contents.         | result of a declaration |
 | `integer` | A signed 64-bit integer.               | `42`, `2 + 3`    |
 | `boolean` | `true` or `false`.                     | `true`, `1 < 2`  |
+| `string`  | A sequence of Unicode characters.      | `"hello"`, `"a" + "b"` |
 
-*Future work.* Strings, functions, and the rest of the type system.
+*Future work.* Functions, and the rest of the type system.
 
 ## 4. Expressions
 
@@ -102,24 +119,31 @@ error and skipped, so scanning continues after it.
 expression      ::= binary-expression
 binary-expression ::= unary-expression
                     | binary-expression binary-operator unary-expression
+                    | if-expression
 unary-expression ::= prefix-operator unary-expression
                     | primary
 primary         ::= integer-literal
                   | boolean-literal
+                  | string-literal
                   | identifier
                   | "(" expression ")"
                   | block
+if-expression   ::= "if" expression block ("else" (block | if-expression))?
 ```
 
 A *primary* is:
 
 - an **integer literal**, evaluating to that integer;
 - a **boolean literal**, evaluating to that boolean;
+- a **string literal**, evaluating to that string with escapes decoded;
 - an **identifier**, evaluating to the value of the referenced binding (an
   unbound identifier is an error);
 - a **parenthesized expression** `( expression )`, evaluating to the inner
   expression;
 - a **block** `{ statements }`, described in §5.
+
+Parentheses around an `if` condition are optional: both `if x < 0 { ... }`
+and `if (x < 0) { ... }` are accepted.
 
 ### 4.1 Unary operators
 
@@ -144,28 +168,67 @@ tightest to loosest below:
 |------------|-----------|---------------|--------|-------|
 | 7 (highest) | `^` | integer, integer | integer | exponentiation; the exponent must be non-negative |
 | 6 | `*` `/` `%` | integer, integer | integer | checked arithmetic; `/` and `%` by zero are errors |
-| 5 | `+` `-` | integer, integer | integer | checked arithmetic |
+| 5 | `+` `-` | both integers or both strings | integer / string | addition or concatenation; checked arithmetic |
 | 4 | `<` `>` `<=` `>=` | integer, integer | boolean | relational comparison |
-| 3 | `==` `!=` | both integers or both booleans | boolean | equality |
+| 3 | `==` `!=` | two integers, booleans, or strings | boolean | equality |
 | 2 | `&` | boolean, boolean | boolean | logical and, short-circuiting |
 | 1 (lowest) | `\|` | boolean, boolean | boolean | logical or, short-circuiting |
 
 Because every binary operator is left-associative, `2 ^ 3 ^ 2` is `(2 ^ 3) ^
 2` (that is, `64`), and `a - b - c` is `(a - b) - c`.
 
+`+` is overloaded by operand type: adding two integers performs checked
+addition, and adding two strings concatenates them. Mixing types is an error.
+
 `&` and `|` are logical operators on booleans only, not bitwise operators on
 integers. Both *short-circuit*: `&` does not evaluate its right-hand side when
 the left-hand side is `false`, and `|` does not evaluate it when the left-hand
 side is `true`. Errors in a skipped operand are therefore not reported.
 
-Equality (`==`, `!=`) is defined for two integers or two booleans; comparing
-values of different types is an error.
+Equality (`==`, `!=`) is defined for two integers, two booleans, or two
+strings; comparing values of different types is an error.
 
 Integer arithmetic is *checked*: addition, subtraction, multiplication,
 negation, and exponentiation that overflow the signed 64-bit range, and
 division or remainder by zero, are errors. A negative exponent is an error.
+The `-` operator remains integer-only; there is no string repetition.
 
 Applying a binary operator to operands of the wrong type is an error.
+
+### 4.3 Conditional expressions
+
+```
+if-expression ::= "if" expression block ("else" (block | if-expression))?
+```
+
+An `if` expression evaluates its condition, which must produce a boolean;
+anything else is an error. When the condition is `true` the `then` block runs,
+and otherwise the `else` branch (if present) runs. The value of the whole
+expression is the value of whichever branch ran; a missing `else` branch makes
+the expression evaluate to `unit` when the condition is `false`.
+
+An `else` branch may itself be another `if` expression, allowing `else if`
+chains. Only the taken branch is evaluated: errors in the skipped branch are
+not reported.
+
+```
+if x < 0 { "negative"; } else if x == 0 { "zero"; } else { "positive"; }
+```
+
+### 4.4 While loops
+
+```
+while-statement ::= "while" expression block
+```
+
+A `while` loop evaluates its condition before each iteration; the condition
+must produce a boolean. The body block runs once per iteration while the
+condition holds, introducing its own lexical scope. The statement evaluates
+to `unit`.
+
+A single loop may run at most a fixed number of iterations (currently
+100,000); exceeding that bound aborts the loop with an error, so a condition
+that never becomes `false` cannot hang the interpreter.
 
 ## 5. Statements and blocks
 
@@ -173,6 +236,7 @@ Applying a binary operator to operands of the wrong type is an error.
 program   ::= statement*
 statement ::= declaration
             | assignment
+            | while-statement
             | expression-statement
             | block
 ```
@@ -250,8 +314,11 @@ source span. Errors include:
 - integer overflow in checked arithmetic;
 - division or remainder by zero;
 - negative exponents;
+- unterminated string literals and unknown or truncated escape sequences;
 - operators applied to operands of the wrong type, including equality
   comparisons between values of different types;
+- `if` or `while` conditions that do not produce a boolean;
+- a loop exceeding the maximum iteration count;
 - expression nesting that exceeds the parser's or evaluator's depth limit.
 
 The parser rejects expressions nested more than a fixed depth (currently 256

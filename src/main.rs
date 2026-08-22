@@ -220,6 +220,7 @@ fn print_value(value: &Value) {
         Value::Unit => {}
         Value::Integer(integer) => println!("{integer}"),
         Value::Boolean(boolean) => println!("{boolean}"),
+        Value::Str(string) => println!("{string}"),
     }
 }
 

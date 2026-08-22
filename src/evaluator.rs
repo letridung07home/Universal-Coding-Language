@@ -25,6 +25,7 @@
 use std::collections::HashMap;
 
 use crate::diagnostic::{Diagnostic, DiagnosticSink, Severity};
+use crate::lexer::unescape_string;
 use crate::parser::{AstKind, AstNode, BinaryOperator};
 use crate::source::{SourceFile, Span};
 
@@ -38,6 +39,13 @@ use crate::source::{SourceFile, Span};
 /// program the parser accepts must never be rejected here.
 const MAX_EVAL_DEPTH: usize = 512;
 
+/// The maximum number of iterations a single `while` loop may run.
+///
+/// Without a bound, `while true { }` would hang the interpreter forever.
+/// The cap also keeps fuzzing and long-lived embedding processes safe from
+/// runaway loops; legitimate programs rarely approach it.
+const MAX_LOOP_ITERATIONS: u64 = 100_000;
+
 /// A runtime value produced by evaluating a program.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
@@ -50,8 +58,8 @@ pub enum Value {
     Integer(i64),
     /// A boolean value (`true` or `false`).
     Boolean(bool),
-    // TODO: strings, functions, and the rest of the type system, once the
-    // lexer and parser gain syntax for them.
+    /// A string of Unicode text.
+    Str(String),
 }
 
 impl Value {
@@ -61,6 +69,7 @@ impl Value {
             Value::Unit => "unit",
             Value::Integer(_) => "integer",
             Value::Boolean(_) => "boolean",
+            Value::Str(_) => "string",
         }
     }
 }
@@ -268,6 +277,16 @@ impl Evaluator {
                 }
             }
             AstKind::BooleanLiteral(value) => Value::Boolean(*value),
+            AstKind::StringLiteral => {
+                let text = match source.slice(node.span) {
+                    Some(text) => text,
+                    None => {
+                        sink.emit(Diagnostic::error("invalid string literal span").at(node.span));
+                        return Value::Unit;
+                    }
+                };
+                Value::Str(unescape_string(text))
+            }
             AstKind::Group { expression } => {
                 self.eval(expression, source, environment, sink, depth + 1)
             }
@@ -319,6 +338,64 @@ impl Evaluator {
                         self.eval_binary(operator, accumulator, operand, spans[index], sink);
                 }
                 accumulator
+            }
+            AstKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                let condition_value = self.eval(condition, source, environment, sink, depth + 1);
+                match condition_value {
+                    Value::Boolean(true) => {
+                        self.eval(then_branch, source, environment, sink, depth + 1)
+                    }
+                    Value::Boolean(false) => match else_branch {
+                        Some(branch) => self.eval(branch, source, environment, sink, depth + 1),
+                        None => Value::Unit,
+                    },
+                    other => {
+                        sink.emit(
+                            Diagnostic::error(format!(
+                                "condition of `if` must be a boolean, found `{}`",
+                                other.type_name()
+                            ))
+                            .at(condition.span),
+                        );
+                        Value::Unit
+                    }
+                }
+            }
+            AstKind::While { condition, body } => {
+                let mut iterations = 0u64;
+                loop {
+                    iterations += 1;
+                    if iterations > MAX_LOOP_ITERATIONS {
+                        sink.emit(
+                            Diagnostic::error("loop exceeded the maximum number of iterations")
+                                .at(node.span),
+                        );
+                        break;
+                    }
+                    let condition_value =
+                        self.eval(condition, source, environment, sink, depth + 1);
+                    match condition_value {
+                        Value::Boolean(true) => {
+                            self.eval(body, source, environment, sink, depth + 1);
+                        }
+                        Value::Boolean(false) => break,
+                        other => {
+                            sink.emit(
+                                Diagnostic::error(format!(
+                                    "condition of `while` must be a boolean, found `{}`",
+                                    other.type_name()
+                                ))
+                                .at(condition.span),
+                            );
+                            break;
+                        }
+                    }
+                }
+                Value::Unit
             }
             AstKind::Assignment { target, value } => {
                 let name = match &target.kind {
@@ -376,16 +453,27 @@ impl Evaluator {
     ) -> Value {
         use BinaryOperator::*;
         match operator {
-            Add | Sub | Mul | Div | Rem | Pow => {
+            Add => {
+                // `+` is overloaded: integer addition or string concatenation.
+                match (left, right) {
+                    (Value::Integer(a), Value::Integer(b)) => match a.checked_add(b) {
+                        Some(sum) => Value::Integer(sum),
+                        None => overflow(span, sink),
+                    },
+                    (Value::Str(a), Value::Str(b)) => {
+                        let mut concatenated = a;
+                        concatenated.push_str(&b);
+                        Value::Str(concatenated)
+                    }
+                    (l, r) => binary_type_error(operator, &l, &r, span, sink),
+                }
+            }
+            Sub | Mul | Div | Rem | Pow => {
                 let (a, b) = match (left, right) {
                     (Value::Integer(a), Value::Integer(b)) => (a, b),
                     (l, r) => return binary_type_error(operator, &l, &r, span, sink),
                 };
                 match operator {
-                    Add => match a.checked_add(b) {
-                        Some(sum) => Value::Integer(sum),
-                        None => overflow(span, sink),
-                    },
                     Sub => match a.checked_sub(b) {
                         Some(difference) => Value::Integer(difference),
                         None => overflow(span, sink),
@@ -448,13 +536,16 @@ impl Evaluator {
                 })
             }
             Equal | NotEqual => {
-                // Equality is defined for two integers or two booleans;
-                // comparing values of different types is an error.
+                // Equality is defined for two integers, two booleans, or two
+                // strings; comparing values of different types is an error.
                 match (left, right) {
                     (Value::Integer(a), Value::Integer(b)) => {
                         Value::Boolean(if operator == Equal { a == b } else { a != b })
                     }
                     (Value::Boolean(a), Value::Boolean(b)) => {
+                        Value::Boolean(if operator == Equal { a == b } else { a != b })
+                    }
+                    (Value::Str(a), Value::Str(b)) => {
                         Value::Boolean(if operator == Equal { a == b } else { a != b })
                     }
                     (l, r) => binary_type_error(operator, &l, &r, span, sink),
@@ -644,29 +735,39 @@ mod tests {
     #[test]
     fn rejects_excessive_evaluation_nesting() {
         // Build a deeply nested AST directly, bypassing the parser's own depth
-        // limit, to exercise the evaluator's independent guard.
-        let mut node = AstNode {
-            span: Span::new(0, 1),
-            kind: AstKind::Integer,
-        };
-        for _ in 0..(MAX_EVAL_DEPTH + 100) {
-            node = AstNode {
-                span: Span::new(0, 1),
-                kind: AstKind::Group {
-                    expression: Box::new(node),
-                },
-            };
-        }
-        let program = AstNode {
-            span: Span::new(0, 1),
-            kind: AstKind::Program {
-                statements: vec![node],
-            },
-        };
-        let source = SourceFile::new("test.ucl", "1");
-        let mut sink = DiagnosticSink::new();
+        // limit, to exercise the evaluator's independent guard. The test runs
+        // on a thread with a generous stack so that reaching the guard never
+        // depends on how large one evaluator frame happens to be.
+        let harness = std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(|| {
+                let mut node = AstNode {
+                    span: Span::new(0, 1),
+                    kind: AstKind::Integer,
+                };
+                for _ in 0..(MAX_EVAL_DEPTH + 100) {
+                    node = AstNode {
+                        span: Span::new(0, 1),
+                        kind: AstKind::Group {
+                            expression: Box::new(node),
+                        },
+                    };
+                }
+                let program = AstNode {
+                    span: Span::new(0, 1),
+                    kind: AstKind::Program {
+                        statements: vec![node],
+                    },
+                };
+                let source = SourceFile::new("test.ucl", "1");
+                let mut sink = DiagnosticSink::new();
 
-        let _ = Evaluator::new().evaluate(&program, &source, &mut sink);
+                let _ = Evaluator::new().evaluate(&program, &source, &mut sink);
+
+                sink
+            })
+            .expect("test harness thread spawns");
+        let sink = harness.join().expect("harness thread does not panic");
 
         assert!(sink.has_errors());
         assert!(
@@ -958,5 +1059,166 @@ mod tests {
         let (value, sink) = eval(&source_text);
         assert!(!sink.has_errors());
         assert_eq!(value, Some(Value::Integer(terms as i64)));
+    }
+
+    #[test]
+    fn evaluates_string_literals_and_concatenation() {
+        let (value, sink) = eval("\"hello\" + \" \" + \"world\";");
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Str("hello world".to_owned())));
+    }
+
+    #[test]
+    fn decodes_escape_sequences_in_strings() {
+        let (value, sink) = eval(r##""a\tb\nc\"d\\";"##);
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Str("a\tb\nc\"d\\".to_owned())));
+    }
+
+    #[test]
+    fn compares_strings_for_equality() {
+        for (source, expected) in [
+            ("\"a\" == \"a\";", true),
+            ("\"a\" == \"b\";", false),
+            ("\"a\" != \"b\";", true),
+        ] {
+            let (value, sink) = eval(source);
+            assert!(!sink.has_errors(), "unexpected error for `{source}`");
+            assert_eq!(value, Some(Value::Boolean(expected)), "for `{source}`");
+        }
+    }
+
+    #[test]
+    fn rejects_mixed_type_operations_on_strings() {
+        for source in ["1 + \"a\";", "\"a\" * 2;", "\"a\" == 1;"] {
+            let (_value, sink) = eval(source);
+            assert!(sink.has_errors(), "expected an error for `{source}`");
+            assert!(
+                sink.iter()
+                    .any(|diagnostic| diagnostic.message.contains("cannot apply")),
+                "expected a type error for `{source}`"
+            );
+        }
+    }
+
+    #[test]
+    fn evaluates_the_taken_branch_of_an_if() {
+        let (value, sink) = eval("if true { 1; } else { 2; };");
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Integer(1)));
+
+        let (value, sink) = eval("if false { 1; } else { 2; };");
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Integer(2)));
+    }
+
+    #[test]
+    fn an_if_without_else_yields_unit_when_false() {
+        let (value, sink) = eval("if false { 1; };");
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Unit));
+
+        let (value, sink) = eval("if true { 1; };");
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Integer(1)));
+    }
+
+    #[test]
+    fn only_the_condition_is_evaluated_before_branching() {
+        // The untaken branch would raise a division-by-zero error.
+        let (value, sink) = eval("if false { 1 / 0; } else { 7; };");
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Integer(7)));
+
+        let (value, sink) = eval("if true { 7; } else { 1 / 0; };");
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Integer(7)));
+    }
+
+    #[test]
+    fn else_if_chains_pick_the_first_true_branch() {
+        let source = "let x = 2; if x == 1 { 10; } else if x == 2 { 20; } else { 30; };";
+        let (value, sink) = eval(source);
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Integer(20)));
+    }
+
+    #[test]
+    fn rejects_a_non_boolean_if_condition() {
+        let (_value, sink) = eval("if 1 { 2; };");
+        assert!(sink.has_errors());
+        assert!(sink.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("condition of `if` must be a boolean")
+        }));
+    }
+
+    #[test]
+    fn rejects_a_non_boolean_while_condition() {
+        let (_value, sink) = eval("while \"x\" { 1; };");
+        assert!(sink.has_errors());
+        assert!(sink.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("condition of `while` must be a boolean")
+        }));
+    }
+
+    #[test]
+    fn while_loops_iterate_until_the_condition_becomes_false() {
+        // The program's last statement is inside the loop's block, so its
+        // value is unit; verify the iteration count via a final reference to
+        // a binding the loop mutated.
+        let source = "
+            let total = 0;
+            let i = 1;
+            while i <= 5 {
+                total = total + i;
+                i = i + 1;
+            };
+        ";
+        let (value, sink) = eval(&format!("{source} total;"));
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Integer(15)));
+    }
+
+    #[test]
+    fn an_infinite_loop_is_capped() {
+        let (value, sink) = eval("while true { };");
+        assert!(sink.has_errors());
+        assert!(sink.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("exceeded the maximum number of iterations")
+        }));
+        assert_eq!(value, None);
+    }
+
+    #[test]
+    fn while_body_runs_in_its_own_scope() {
+        // A `let` inside the body must not leak into the outer scope, and
+        // assignment must still reach the outer binding.
+        let source = "
+            let i = 0;
+            let seen = 0;
+            while i < 3 {
+                i = i + 1;
+                let inner = i;
+                seen = inner;
+            };
+            seen;
+        ";
+        let (value, sink) = eval(source);
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Integer(3)));
+    }
+
+    #[test]
+    fn strings_flow_through_variables_and_blocks() {
+        let source = "let greeting = \"hi \"; let name = \"ucl\"; greeting + name;";
+        let (value, sink) = eval(source);
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Str("hi ucl".to_owned())));
     }
 }

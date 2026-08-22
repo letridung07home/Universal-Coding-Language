@@ -20,9 +20,9 @@ concrete implementation work should be tracked in issues as it is scheduled.
 - [ ] Define keyword, assignment, operator, and runtime-error semantics
 - [ ] Decide whether UCL will be statically or dynamically typed
 - [x] Add boolean literals and equality operators
-- [ ] Add strings and string operations
+- [x] Add strings and string operations
+- [x] Add conditional and looping constructs
 - [ ] Add functions, parameters, return values, and closures
-- [ ] Add conditional and looping constructs
 
 ## Tooling and ecosystem
 

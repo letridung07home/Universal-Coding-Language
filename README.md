@@ -12,9 +12,11 @@ evaluator, command-line interface, and source-aware diagnostics.
 
 ## Current features
 
-- Signed 64-bit integers and booleans
+- Signed 64-bit integers, booleans, and strings
 - Checked arithmetic, comparison, and equality operators
+- String concatenation with escape sequences
 - Short-circuiting logical operators
+- `if`/`else` conditionals and `while` loops
 - `let` declarations and assignment
 - Blocks with lexical scoping
 - Line comments beginning with `//`
@@ -31,14 +33,15 @@ Create `example.ucl`:
 ```ucl
 let width = 6;
 let height = 7;
-width * height;
+let label = "area";
+if width * height == 42 { label; } else { "mismatch"; };
 ```
 
 Evaluate it:
 
 ```console
 $ cargo run -- example.ucl
-42
+area
 ```
 
 Use `cargo run -- --help` to display command-line help.

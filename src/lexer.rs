@@ -12,6 +12,12 @@ pub enum Keyword {
     True,
     /// The `false` boolean literal.
     False,
+    /// The `if` conditional keyword.
+    If,
+    /// The `else` conditional keyword.
+    Else,
+    /// The `while` loop keyword.
+    While,
 }
 
 /// The kind of a lexical token.
@@ -27,6 +33,12 @@ pub enum TokenKind {
     Ident,
     /// An integer literal: `42`, `123`, etc.
     Integer,
+    /// A string literal: `"hello"`, including the surrounding quotes.
+    ///
+    /// Escape sequences inside the literal are validated here; decoding
+    /// happens when the parser or evaluator reads back the lexeme via
+    /// [`unescape_string`].
+    StringLiteral,
     /// A punctuation character: `(`, `)`, `{`, `}`, `+`, `-`, etc.
     Punctuation(char),
     /// A two-character operator: `<=`.
@@ -112,6 +124,9 @@ impl<'src> Lexer<'src> {
                     "let" => TokenKind::Keyword(Keyword::Let),
                     "true" => TokenKind::Keyword(Keyword::True),
                     "false" => TokenKind::Keyword(Keyword::False),
+                    "if" => TokenKind::Keyword(Keyword::If),
+                    "else" => TokenKind::Keyword(Keyword::Else),
+                    "while" => TokenKind::Keyword(Keyword::While),
                     _ => TokenKind::Ident,
                 };
                 tokens.push(Token {
@@ -130,6 +145,60 @@ impl<'src> Lexer<'src> {
                 }
                 tokens.push(Token {
                     kind: TokenKind::Integer,
+                    span: Span::new(start, pos),
+                });
+                continue;
+            }
+
+            // String literals: `"..."` with `\n`, `\t`, `\\`, and `\"`
+            // escape sequences. A raw newline may not appear inside a
+            // string; an unterminated literal is reported and the token
+            // still covers what was scanned so parsing can continue.
+            if byte == b'"' {
+                let start = pos;
+                pos += 1;
+                let mut terminated = false;
+                while pos < bytes.len() {
+                    match bytes[pos] {
+                        b'"' => {
+                            pos += 1;
+                            terminated = true;
+                            break;
+                        }
+                        b'\\' => match bytes.get(pos + 1) {
+                            Some(b'n' | b't' | b'\\' | b'"') => pos += 2,
+                            Some(_) => {
+                                sink.emit(
+                                    Diagnostic::error(format!(
+                                        "unknown escape sequence `\\{}`",
+                                        contents[pos + 1..]
+                                            .chars()
+                                            .next()
+                                            .expect("a byte offset after `pos` is a char boundary")
+                                    ))
+                                    .at(Span::new(pos, pos + 2)),
+                                );
+                                pos += 2;
+                            }
+                            None => {
+                                sink.emit(
+                                    Diagnostic::error("unterminated escape sequence")
+                                        .at(Span::new(pos, pos + 1)),
+                                );
+                                pos += 1;
+                            }
+                        },
+                        b'\n' => break,
+                        _ => pos += 1,
+                    }
+                }
+                if !terminated {
+                    sink.emit(
+                        Diagnostic::error("unterminated string literal").at(Span::new(start, pos)),
+                    );
+                }
+                tokens.push(Token {
+                    kind: TokenKind::StringLiteral,
                     span: Span::new(start, pos),
                 });
                 continue;
@@ -189,6 +258,39 @@ impl<'src> Lexer<'src> {
 
         tokens
     }
+}
+
+/// Decodes the contents of a string literal into its runtime value.
+///
+/// `raw` is the lexeme as it appears in the source, including the
+/// surrounding quotes. Escape sequences (`\n`, `\t`, `\\`, `\"`) are
+/// decoded; an unknown escape sequence is passed through unchanged, since
+/// the lexer has already reported it as an error.
+pub fn unescape_string(raw: &str) -> String {
+    let inner = raw
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+        .unwrap_or(raw);
+    let mut decoded = String::with_capacity(inner.len());
+    let mut characters = inner.chars();
+    while let Some(character) = characters.next() {
+        if character != '\\' {
+            decoded.push(character);
+            continue;
+        }
+        match characters.next() {
+            Some('n') => decoded.push('\n'),
+            Some('t') => decoded.push('\t'),
+            Some('\\') => decoded.push('\\'),
+            Some('"') => decoded.push('"'),
+            Some(escaped) => {
+                decoded.push('\\');
+                decoded.push(escaped);
+            }
+            None => decoded.push('\\'),
+        }
+    }
+    decoded
 }
 
 #[cfg(test)]
@@ -432,5 +534,118 @@ mod tests {
         let kinds: Vec<TokenKind> = tokens.iter().map(|token| token.kind).collect();
         assert_eq!(kinds, vec![TokenKind::Integer, TokenKind::Eof]);
         assert_eq!(lexeme(&source, &tokens[0]), "42");
+    }
+
+    #[test]
+    fn recognizes_if_else_and_while_as_keywords() {
+        let source = SourceFile::new("main.ucl", "if elsex while iff _if");
+        let tokens = Lexer::new(&source).tokenize(&mut DiagnosticSink::new());
+
+        let kinds: Vec<TokenKind> = tokens.iter().map(|token| token.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::Keyword(Keyword::If),
+                TokenKind::Ident,
+                TokenKind::Keyword(Keyword::While),
+                TokenKind::Ident,
+                TokenKind::Ident,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn tokenizes_string_literals_with_spans_including_quotes() {
+        let source = SourceFile::new("main.ucl", "let x = \"hi there\";");
+        let mut sink = DiagnosticSink::new();
+        let tokens = Lexer::new(&source).tokenize(&mut sink);
+
+        assert!(!sink.has_errors());
+        assert_eq!(tokens[3].kind, TokenKind::StringLiteral);
+        assert_eq!(lexeme(&source, &tokens[3]), "\"hi there\"");
+    }
+
+    #[test]
+    fn accepts_the_supported_escape_sequences() {
+        let source = SourceFile::new("main.ucl", "\"a\\n\\t\\\\\\\"b\"");
+        let mut sink = DiagnosticSink::new();
+        let tokens = Lexer::new(&source).tokenize(&mut sink);
+
+        assert!(!sink.has_errors());
+        assert_eq!(tokens[0].kind, TokenKind::StringLiteral);
+        assert_eq!(unescape_string(lexeme(&source, &tokens[0])), "a\n\t\\\"b");
+    }
+
+    #[test]
+    fn reports_unknown_escape_sequences() {
+        let source = SourceFile::new("main.ucl", "\"a\\qb\"");
+        let mut sink = DiagnosticSink::new();
+        let tokens = Lexer::new(&source).tokenize(&mut sink);
+
+        assert!(sink.has_errors());
+        assert_eq!(tokens[0].kind, TokenKind::StringLiteral);
+        let diagnostics: Vec<_> = sink.iter().collect();
+        assert_eq!(diagnostics.len(), 1);
+        assert!(
+            diagnostics[0]
+                .message
+                .contains("unknown escape sequence `\\q`")
+        );
+    }
+
+    #[test]
+    fn reports_unterminated_string_literals() {
+        let source = SourceFile::new("main.ucl", "\"never closed");
+        let mut sink = DiagnosticSink::new();
+        let tokens = Lexer::new(&source).tokenize(&mut sink);
+
+        assert!(sink.has_errors());
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("unterminated string literal"))
+        );
+        // The token still covers the scanned text so parsing can continue.
+        assert_eq!(tokens[0].kind, TokenKind::StringLiteral);
+        assert_eq!(lexeme(&source, &tokens[0]), "\"never closed");
+    }
+
+    #[test]
+    fn a_string_may_not_span_a_raw_newline() {
+        let source = SourceFile::new("main.ucl", "\"first\nlet x = 1;\"");
+        let mut sink = DiagnosticSink::new();
+        let tokens = Lexer::new(&source).tokenize(&mut sink);
+
+        // Both lines produce an unterminated-string diagnostic.
+        assert!(sink.has_errors());
+        assert_eq!(
+            sink.iter()
+                .filter(|diagnostic| diagnostic.message.contains("unterminated string literal"))
+                .count(),
+            2
+        );
+        // Scanning recovers and tokenizes the rest of each line.
+        let kinds: Vec<TokenKind> = tokens.iter().map(|token| token.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::StringLiteral,
+                TokenKind::Keyword(Keyword::Let),
+                TokenKind::Ident,
+                TokenKind::Punctuation('='),
+                TokenKind::Integer,
+                TokenKind::Punctuation(';'),
+                TokenKind::StringLiteral,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn unescape_string_passes_text_through_without_escapes() {
+        assert_eq!(unescape_string("\"plain\""), "plain");
+        assert_eq!(unescape_string("\"\""), "");
+        // Unknown escapes are left as-is; the lexer reports them separately.
+        assert_eq!(unescape_string("\"a\\xb\""), "a\\xb");
     }
 }

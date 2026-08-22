@@ -50,7 +50,7 @@ impl Rng {
 }
 
 /// Characters likely to exercise interesting lexer and parser paths.
-const ALPHABET: &str = "abcxyzlet012379+-*/%^<>&|!=;(){} \t\néπ🙂";
+const ALPHABET: &str = "abcxyzlet012379+-*/%^<>&|!=;(){} \t\néπ🙂\"\\ifewhls";
 
 /// Generates a random string up to 64 characters long.
 fn random_string(rng: &mut Rng) -> String {
@@ -247,5 +247,69 @@ fn operator_precedence_matches_the_specification() {
                 assert!(had_errors, "expected an error for `{source_text}`");
             }
         }
+    }
+}
+
+#[test]
+fn while_loops_count_exactly_to_their_bound() {
+    let mut rng = Rng::new(0x0C0F_FEED_0C0F_FEED);
+
+    for _ in 0..200 {
+        let bound = rng.range(0, 25);
+        let source_text = format!(
+            "let i = 0; let total = 0; \
+             while i < {bound} {{ total = total + 1; i = i + 1; }}; total;"
+        );
+        let (value, had_errors) = eval_expression(&source_text);
+
+        assert!(!had_errors, "unexpected error for `{source_text}`");
+        assert_eq!(value, Value::Integer(bound), "mismatch for `{source_text}`");
+    }
+}
+
+#[test]
+fn if_expressions_select_the_matching_branch() {
+    let mut rng = Rng::new(0x1F_1F_1F_1F_1F_1F);
+
+    for _ in 0..500 {
+        let a = rng.range(-50, 50);
+        let b = rng.range(-50, 50);
+        let source_text = format!("if {a} < {b} {{ {a}; }} else {{ {b}; }};");
+        let (value, had_errors) = eval_expression(&source_text);
+
+        assert!(!had_errors, "unexpected error for `{source_text}`");
+        assert_eq!(
+            value,
+            Value::Integer(a.min(b)),
+            "mismatch for `{source_text}`"
+        );
+    }
+}
+
+#[test]
+fn string_concatenation_accumulates_exactly() {
+    let mut rng = Rng::new(0x0057_1230_0000_9999);
+
+    const PIECES: [&str; 5] = ["a", "bb", "ccc", "-", "x y"];
+    for _ in 0..300 {
+        let count = rng.below(6) as usize + 1;
+        let chosen: Vec<&str> = (0..count)
+            .map(|_| PIECES[rng.below(PIECES.len() as u64) as usize])
+            .collect();
+        let expected: String = chosen.concat();
+        let source_text = chosen
+            .iter()
+            .map(|piece| format!("\"{piece}\""))
+            .collect::<Vec<_>>()
+            .join(" + ")
+            + ";";
+
+        let (value, had_errors) = eval_expression(&source_text);
+        assert!(!had_errors, "unexpected error for `{source_text}`");
+        assert_eq!(
+            value,
+            Value::Str(expected.clone()),
+            "mismatch for `{source_text}`"
+        );
     }
 }
