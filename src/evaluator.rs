@@ -1,6 +1,6 @@
 //! Evaluator: executes an abstract syntax tree.
 //!
-//! The evaluator walks the AST produced by the [`Parser`](crate::parser::Parser)
+//! The evaluator walks the AST produced by the [`Parser`]
 //! and computes a [`Value`]. The [`SourceFile`] is needed alongside the AST
 //! because nodes carry [`Span`]s rather than their text, so identifier names
 //! and integer literals are read back out of the source.

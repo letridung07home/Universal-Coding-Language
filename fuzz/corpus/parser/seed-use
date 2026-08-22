@@ -1,0 +1,3 @@
+use "lib.ucl";
+fn main() { helper(); };
+main();

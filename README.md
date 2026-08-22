@@ -18,13 +18,11 @@ evaluator, command-line interface, and source-aware diagnostics.
 - Short-circuiting logical operators
 - `if`/`else` conditionals and `while` loops
 - Functions: declarations, literals, closures, and recursion
-- File-based modules via `use "path.ucl";`
-- Line and nesting block comments
-- String comparisons (`<`, `<=`, `>`, `>=`)
-- Named functions, positional parameters, calls, and recursion
 - `let` declarations and assignment
 - Blocks with lexical scoping
-- Line comments beginning with `//`
+- File-based modules via `use "path.ucl";`
+- Line comments (`//`) and nesting block comments (`/* */`)
+- String comparisons (`<`, `<=`, `>`, `>=`)
 - Error diagnostics with source excerpts
 - A library API and the `ucl` command-line program
 

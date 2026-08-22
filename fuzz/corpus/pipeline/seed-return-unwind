@@ -1,0 +1,1 @@
+fn find(limit) { let i = 0; while i < limit { if i * i > 50 { return i; }; i = i + 1; }; return -1; }; find(100);

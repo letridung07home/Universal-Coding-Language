@@ -96,7 +96,8 @@ pub enum AstKind {
     /// A conditional expression: `if condition { ... } else { ... }`.
     ///
     /// The value of the expression is the value of whichever branch runs;
-    /// a missing `else` branch contributes [`unit`](Value::Unit) semantics.
+    /// a missing `else` branch contributes
+    /// [`unit`](crate::evaluator::Value::Unit) semantics.
     If {
         /// The condition; it must evaluate to a boolean.
         condition: Box<AstNode>,

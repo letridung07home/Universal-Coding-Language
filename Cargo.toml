@@ -1,7 +1,8 @@
 [package]
 name = "universal-coding-language"
-version = "0.8.0"
+version = "0.8.1"
 edition = "2024"
+rust-version = "1.85"
 description = "A universal coding language that excels in every task possible"
 repository = "https://github.com/letridung07home/Universal-Coding-Language.git"
 readme = "README.md"

@@ -12,6 +12,11 @@ may contain breaking changes; every breaking change is listed under a
 it. Once version 1.0 is reached, breaking changes will only ship in major
 versions.
 
+The crate declares a minimum supported Rust version (`rust-version` in
+`Cargo.toml`, currently 1.85, the first release supporting edition 2024).
+The MSRV may rise in minor releases but never within a patch release, and
+an MSRV increase is noted in the changelog entry that introduces it.
+
 ## Language compatibility
 
 The language specification (`docs/spec.md`) defines the language. What is

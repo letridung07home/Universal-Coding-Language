@@ -1,0 +1,1 @@
+fn make(base) { return fn(n) { base + n; }; }; let add5 = make(5); add5(37);

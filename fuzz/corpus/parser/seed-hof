@@ -1,0 +1,1 @@
+fn apply(f, x) { f(x); }; apply(fn(n) { n * 2; }, 21) + fn() { 0; }();

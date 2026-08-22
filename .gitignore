@@ -7,8 +7,13 @@
 *~
 .idea/
 .vscode/
+node_modules/
 
 # cargo-fuzz artifacts
 fuzz/target
-fuzz/corpus
 fuzz/artifacts
+# The corpus directory is a fuzzing scratch space, but the checked-in seed
+# files are tracked so a fresh clone fuzzes from meaningful input.
+fuzz/corpus/*
+!fuzz/corpus/*/
+!fuzz/corpus/*/seed-*

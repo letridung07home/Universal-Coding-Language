@@ -2,6 +2,23 @@
 
 All notable changes to UCL are documented here.
 
+## 0.8.1 - 2026-08-22
+
+### Added
+
+- The fuzz corpus seed files are now tracked in the repository, so a fresh
+  clone fuzzes from meaningful input covering strings, control flow,
+  closures, modules, and block comments.
+- A CI check builds the documentation with warnings denied.
+- A declared minimum supported Rust version: 1.85 (`rust-version` in
+  `Cargo.toml`).
+
+### Changed
+
+- Fixed two rustdoc warnings (a broken intra-doc link and a redundant
+  explicit link target).
+- Deduplicated the README feature list.
+
 ## 0.8.0 - 2026-08-22
 
 ### Added
