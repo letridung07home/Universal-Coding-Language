@@ -122,6 +122,6 @@ pub fn format_value(value: &Value) -> Option<String> {
         Value::Integer(integer) => Some(format!("{integer}")),
         Value::Boolean(boolean) => Some(format!("{boolean}")),
         Value::Str(string) => Some(string.clone()),
-        Value::Function(_) => Some("<function>".to_owned()),
+        Value::Function(_) | Value::Builtin(_) => Some("<function>".to_owned()),
     }
 }

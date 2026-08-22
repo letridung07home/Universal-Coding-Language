@@ -112,10 +112,25 @@ fn evaluates_if_else_and_while_end_to_end() {
 fn evaluates_function_calls_end_to_end() {
     let source = "fn triple(value) { value * 3; }; triple(14);";
     let (stdout, stderr, success) = run(source);
-
     assert!(success, "stderr: {stderr}");
     assert_eq!(stdout, "42\n");
     assert!(stderr.is_empty());
+}
+
+#[test]
+fn evaluates_len_end_to_end() {
+    let (stdout, stderr, success) = run("len(\"hé\");");
+    assert!(success, "stderr: {stderr}");
+    assert_eq!(stdout, "2\n");
+    assert!(stderr.is_empty());
+}
+
+#[test]
+fn reports_len_errors_without_stdout() {
+    let (stdout, stderr, success) = run("len(1);");
+    assert!(!success);
+    assert!(stdout.is_empty());
+    assert!(stderr.contains("`len` expects a string argument"));
 }
 
 #[test]
@@ -333,6 +348,15 @@ fn repl_reset_forgets_bindings() {
     assert_eq!(code, 0);
     assert!(stdout.contains("session reset"), "stdout: {stdout}");
     assert!(stderr.contains("undefined variable"), "stderr: {stderr}");
+}
+
+#[test]
+fn repl_reset_keeps_the_builtin_prelude() {
+    let (stdout, stderr, code) = run_repl("let len = 1;\n:reset\nlen(\"abc\");\n");
+    assert_eq!(code, 0);
+    assert!(stdout.contains("session reset"), "stdout: {stdout}");
+    assert!(stdout.contains("3"), "stdout: {stdout}");
+    assert!(stderr.is_empty(), "stderr: {stderr}");
 }
 
 #[test]

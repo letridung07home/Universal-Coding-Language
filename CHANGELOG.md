@@ -2,6 +2,32 @@
 
 All notable changes to UCL are documented here.
 
+## 1.1.0 - 2026-08-22
+
+### Added
+
+- The first built-in function: `len(string)`, which returns the number of
+  Unicode scalar values in its string argument. Built-ins live in a prelude
+  available to every new environment, including a reset REPL session; ordinary
+  user bindings may shadow their names.
+- The public `BuiltinFunction` type and `Value::Builtin` variant, allowing
+  library consumers to recognize prelude callables.
+- Regression coverage for `len` across evaluator, CLI, REPL-reset, and fuzz
+  pipeline entry points.
+
+### Changed
+
+- String values are now bounded to 8 MiB of UTF-8 bytes. Decoded literals or
+  concatenations that would exceed the limit report a runtime error and stop
+  the current evaluation, preventing repeated concatenation from exhausting
+  host memory.
+- The pipeline fuzz corpus includes a bounded exponential-concatenation seed
+  that exercises the string-value safeguard. The harness now mirrors the
+  production pipeline by skipping evaluation after lexer or parser errors.
+- Diagnostic retention is capped at 1,000 entries per pipeline run, and
+  evaluation stops at that cap so repeated runtime failures cannot exhaust host
+  memory.
+
 ## 1.0.0 - 2026-08-22
 
 The first stable release. The language, command-line interface, Rust library

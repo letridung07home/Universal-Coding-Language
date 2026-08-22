@@ -7,7 +7,7 @@ provides an interpreter with a lexer, parser, evaluator, file-based modules,
 an interactive REPL, a command-line interface, and source-aware diagnostics.
 
 > [!NOTE]
-> UCL 1.0 is the first stable release: the language, CLI, library API, and
+> UCL 1.1 follows the first stable release: the language, CLI, library API, and
 > error categories are covered by [compatibility guarantees](docs/guarantees.md).
 > It remains a deliberately small language — not a batteries-included
 > general-purpose scripting environment.
@@ -16,7 +16,8 @@ an interactive REPL, a command-line interface, and source-aware diagnostics.
 
 - Signed 64-bit integers, booleans, and strings
 - Checked arithmetic, comparison, and equality operators
-- String concatenation with escape sequences
+- String concatenation with escape sequences and a deterministic 8 MiB value limit
+- Built-in functions, beginning with Unicode-aware `len(string)`
 - Short-circuiting logical operators
 - `if`/`else` conditionals and `while` loops
 - Functions: declarations, literals, closures, and recursion
@@ -41,14 +42,15 @@ Create `example.ucl`:
 ```ucl
 fn area(w, h) { w * h; };
 let describe = fn(n) { if n == 42 { "the answer"; } else { "not quite"; }; };
-describe(area(6, 7));
+let label = "UCL";
+len(label + " 1.1");
 ```
 
 Evaluate it:
 
 ```console
 $ cargo run -- example.ucl
-area
+7
 ```
 
 Use `cargo run -- --help` to display command-line help, or start an
@@ -56,10 +58,12 @@ interactive session by running `ucl` without arguments:
 
 ```console
 $ cargo run
-UCL 1.0.0 interactive mode — type :help for help.
+UCL 1.1.0 interactive mode — type :help for help.
 >>> let x = 40;
 >>> x + 2;
 42
+>>> len("hé");
+2
 >>> fn make(base) { return fn(n) { base + n; }; };
 >>> let add5 = make(5);
 >>> add5(37);
@@ -128,10 +132,10 @@ architecture, and contribution instructions.
 
 ## Roadmap
 
-Version 1.0 marks the first stable release; the guarantees above now apply in
-full. Future directions — built-in functions, namespace member access for
-imports, and a package story — are sketched in the
-[project roadmap](docs/roadmap.md).
+Version 1.0 marked the first stable release; the guarantees above now apply in
+full. UCL 1.1 adds the first built-in, `len(string)`. Future directions —
+additional built-ins, namespace member access for imports, and a package story
+— are sketched in the [project roadmap](docs/roadmap.md).
 
 ## Contributing
 

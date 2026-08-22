@@ -4,6 +4,12 @@ use std::fmt;
 
 use crate::source::Span;
 
+/// The maximum number of diagnostics retained from a single pipeline run.
+///
+/// This preserves useful multi-error reporting while preventing a loop that
+/// repeatedly fails from allocating diagnostics until host memory is exhausted.
+const MAX_DIAGNOSTICS: usize = 1_000;
+
 /// The severity of a [`Diagnostic`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Severity {
@@ -95,7 +101,9 @@ impl DiagnosticSink {
     /// Diagnostics are collected in emission order and can be retrieved
     /// via [`iter`](Self::iter).
     pub fn emit(&mut self, diagnostic: Diagnostic) {
-        self.diagnostics.push(diagnostic);
+        if self.diagnostics.len() < MAX_DIAGNOSTICS {
+            self.diagnostics.push(diagnostic);
+        }
     }
 
     /// Returns true if any error-severity diagnostic has been emitted.
@@ -117,8 +125,32 @@ impl DiagnosticSink {
         self.diagnostics.is_empty()
     }
 
+    /// Returns true when the sink has reached its retention limit.
+    ///
+    /// Evaluators use this to stop work that would only produce discarded
+    /// diagnostics after a program has already reported many errors.
+    pub fn is_full(&self) -> bool {
+        self.diagnostics.len() >= MAX_DIAGNOSTICS
+    }
+
     /// Returns an iterator over all recorded diagnostics, in emission order.
     pub fn iter(&self) -> impl Iterator<Item = &Diagnostic> {
         self.diagnostics.iter()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bounds_retained_diagnostics() {
+        let mut sink = DiagnosticSink::new();
+        for _ in 0..(MAX_DIAGNOSTICS + 10) {
+            sink.emit(Diagnostic::error("error"));
+        }
+        assert_eq!(sink.len(), MAX_DIAGNOSTICS);
+        assert!(sink.is_full());
+        assert!(sink.has_errors());
     }
 }
