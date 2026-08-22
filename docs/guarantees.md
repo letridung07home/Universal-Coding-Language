@@ -3,7 +3,7 @@
 This document describes what the UCL project promises to keep stable across
 releases, and what may change. It applies to the language, the `ucl` command
 line interface, and the Rust library crate. These guarantees apply in full as
-of version 1.1.0.
+of version 1.2.0.
 
 ## Versioning policy
 
@@ -82,6 +82,8 @@ created after a REPL reset; user bindings may shadow its names:
 - Enum variants added to `AstKind`, `Value`, `BuiltinFunction`, or `Keyword`
   make existing exhaustive matches non-exhaustive from the next minor release
   onward; downstream matchers must handle unknown cases or pin their dependency.
+  Version 1.2 adds `AstKind::Member`, `Value::Module`, `ModuleValue`, and the
+  contextual `TokenKind::ImportAs` token for aliased imports.
 
 ## Command line interface
 
@@ -115,3 +117,7 @@ but it is informational rather than a formal compatibility surface:
 - The evaluator reads module files from the local filesystem at evaluation
   time. Sandbox restrictions, network fetching, and package registries do
   not exist today and would be additive features.
+- Both `use "path.ucl";` flat imports and `use "path.ucl" as alias;`
+  namespaced imports are stable language forms. Aliased imports expose a
+  read-only module namespace, and a completed module is evaluated at most once
+  per canonical path per session.

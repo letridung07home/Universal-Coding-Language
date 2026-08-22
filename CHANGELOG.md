@@ -2,6 +2,28 @@
 
 All notable changes to UCL are documented here.
 
+## 1.2.0 - 2026-08-22
+
+### Added
+
+- Aliased local-file imports: `use "path.ucl" as module;` binds one read-only
+  module namespace, and `module.name` resolves an exported value or callable.
+  Existing `use "path.ucl";` flat imports remain supported unchanged.
+- Completed module exports are cached per canonical path for each session, so
+  aliases, flat imports, and mixed import forms reuse one module evaluation.
+- The public `ModuleValue` type, `Value::Module` variant,
+  `AstKind::Member` variant, and contextual `TokenKind::ImportAs` token.
+- Parser, evaluator, CLI, REPL, and fuzz-corpus regression coverage for
+  aliased imports, member access, member errors, import ordering, and cache
+  reuse.
+
+### Changed
+
+- Flat import collisions are now checked before any export is copied, so a
+  failed legacy import cannot leave a partial set of module bindings behind.
+- Evaluating a namespace as a final CLI or REPL expression renders as
+  `<module>`.
+
 ## 1.1.0 - 2026-08-22
 
 ### Added

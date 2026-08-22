@@ -409,6 +409,31 @@ fn programs_can_import_local_modules() {
 }
 
 #[test]
+fn programs_can_import_local_modules_with_a_namespace_alias() {
+    let dir = programs_can_import_local_modules_setup();
+    fs::write(
+        dir.join("math.ucl"),
+        "fn double(n) { n * 2; }; let answer = 21;",
+    )
+    .expect("write module");
+    let main_path = dir.join("main.ucl");
+    fs::write(
+        &main_path,
+        "use \"math.ucl\" as math;\nmath.double(math.answer);",
+    )
+    .expect("write main");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_ucl"))
+        .arg(&main_path)
+        .output()
+        .expect("run the ucl binary");
+
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "42");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn a_circular_import_is_reported_with_an_excerpt() {
     let dir = programs_can_import_local_modules_setup();
     fs::write(dir.join("a.ucl"), "use \"b.ucl\";").expect("write a");
@@ -454,7 +479,7 @@ fn repl_use_resolves_modules_against_the_working_directory() {
         .stdin
         .as_mut()
         .expect("stdin is piped")
-        .write_all(b"use \"helper.ucl\";\nmagic;\n")
+        .write_all(b"use \"helper.ucl\" as helper;\nhelper.magic;\n")
         .expect("write REPL input");
     let output = child.wait_with_output().expect("repl exits");
 

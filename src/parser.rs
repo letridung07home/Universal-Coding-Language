@@ -60,6 +60,13 @@ pub enum AstKind {
     StringLiteral,
     /// An identifier reference.
     Identifier,
+    /// Read-only member access such as `math.double`.
+    Member {
+        /// The expression that evaluates to a module namespace.
+        object: Box<AstNode>,
+        /// Span of the member identifier.
+        member: Span,
+    },
     /// A parenthesized expression.
     Group {
         /// The expression between the parentheses.
@@ -140,16 +147,19 @@ pub enum AstKind {
         /// The returned expression, if any. A bare `return` returns unit.
         value: Option<Box<AstNode>>,
     },
-    /// An import statement: `use "path.ucl";`.
+    /// An import statement: `use "path.ucl";` or `use "path.ucl" as math;`.
     ///
     /// The path span covers the string literal; the decoded text is
     /// recovered from the source via [`crate::lexer::unescape_string`] at
-    /// evaluation time. Only valid at the top level of a program.
+    /// evaluation time. An alias creates a module namespace binding. Imports
+    /// are valid only at the top level of a program.
     Use {
         /// Span of the `use` keyword.
         keyword: Span,
         /// Span of the module path string literal.
         path: Span,
+        /// Optional span of the namespace alias.
+        alias: Option<Span>,
     },
 }
 
@@ -311,7 +321,7 @@ impl Parser {
         ))
     }
 
-    /// Parses an import statement: `use "path";`.
+    /// Parses an import statement: `use "path";` or `use "path" as name;`.
     fn parse_use(&mut self, sink: &mut DiagnosticSink) -> Option<AstNode> {
         let keyword = self.advance().span;
 
@@ -320,10 +330,25 @@ impl Parser {
             return None;
         }
         let path = self.advance().span;
+        let alias = if self.check_kind(TokenKind::ImportAs) {
+            self.advance();
+            if !self.check_kind(TokenKind::Ident) {
+                self.error_current("expected an identifier after `as`", sink);
+                return None;
+            }
+            Some(self.advance().span)
+        } else {
+            None
+        };
+        let end = alias.map_or(path.end, |alias| alias.end);
 
         Some(AstNode::new(
-            Span::new(keyword.start, path.end),
-            AstKind::Use { keyword, path },
+            Span::new(keyword.start, end),
+            AstKind::Use {
+                keyword,
+                path,
+                alias,
+            },
         ))
     }
 
@@ -472,44 +497,63 @@ impl Parser {
         result
     }
 
-    /// Parses a postfix expression, including one or more function calls.
+    /// Parses a postfix expression, including calls and member access.
     ///
-    /// Calls bind tighter than unary and infix operators, so `-f(1)` parses as
-    /// `-(f(1))` and `f(1)(2)` is a nested call expression.
+    /// Postfixes bind tighter than unary and infix operators and chain from
+    /// left to right, so `math.make(1).next(2)` is parsed as
+    /// `((math.make)(1)).next(2)`.
     fn parse_postfix(&mut self, sink: &mut DiagnosticSink) -> Option<AstNode> {
-        let mut callee = self.parse_primary(sink)?;
+        let mut expression = self.parse_primary(sink)?;
 
-        while self.consume_punctuation('(') {
-            let mut arguments = Vec::new();
-            if !self.check_punctuation(')') {
-                loop {
-                    arguments.push(self.parse_expression(0, sink)?);
-                    if self.consume_punctuation(',') {
-                        continue;
+        loop {
+            if self.consume_punctuation('(') {
+                let mut arguments = Vec::new();
+                if !self.check_punctuation(')') {
+                    loop {
+                        arguments.push(self.parse_expression(0, sink)?);
+                        if self.consume_punctuation(',') {
+                            continue;
+                        }
+                        break;
                     }
-                    break;
                 }
-            }
 
-            let end = if self.consume_punctuation(')') {
-                self.tokens[self.cursor - 1].span.end
+                let end = if self.consume_punctuation(')') {
+                    self.tokens[self.cursor - 1].span.end
+                } else {
+                    self.error_current("expected `)` after function arguments", sink);
+                    arguments
+                        .last()
+                        .map_or(expression.span.end, |argument| argument.span.end)
+                };
+                let span = Span::new(expression.span.start, end);
+                expression = AstNode::new(
+                    span,
+                    AstKind::Call {
+                        callee: Box::new(expression),
+                        arguments,
+                    },
+                );
+            } else if self.consume_punctuation('.') {
+                if !self.check_kind(TokenKind::Ident) {
+                    self.error_current("expected an identifier after `.`", sink);
+                    return None;
+                }
+                let member = self.advance().span;
+                let span = Span::new(expression.span.start, member.end);
+                expression = AstNode::new(
+                    span,
+                    AstKind::Member {
+                        object: Box::new(expression),
+                        member,
+                    },
+                );
             } else {
-                self.error_current("expected `)` after function arguments", sink);
-                arguments
-                    .last()
-                    .map_or(callee.span.end, |argument| argument.span.end)
-            };
-            let span = Span::new(callee.span.start, end);
-            callee = AstNode::new(
-                span,
-                AstKind::Call {
-                    callee: Box::new(callee),
-                    arguments,
-                },
-            );
+                break;
+            }
         }
 
-        Some(callee)
+        Some(expression)
     }
 
     /// Parses a primary expression (the atomic elements of expressions).
@@ -1433,6 +1477,50 @@ mod tests {
     #[test]
     fn use_is_rejected_inside_blocks_and_functions() {
         for source_text in ["{ use \"a.ucl\"; }", "fn f() { use \"a.ucl\"; };"] {
+            let source = SourceFile::new("t.ucl", source_text);
+            let mut sink = DiagnosticSink::new();
+            let tokens = Lexer::new(&source).tokenize(&mut sink);
+            Parser::new(tokens).parse(&mut sink);
+            assert!(sink.has_errors(), "`{source_text}` should be rejected");
+        }
+    }
+
+    #[test]
+    fn parses_aliased_use_statements_and_member_access() {
+        let (ast, sink) = parse("use \"lib/math.ucl\" as math; math.double(21);");
+        assert!(!sink.has_errors());
+        let AstKind::Program { statements } = ast.kind else {
+            panic!("expected program")
+        };
+        assert!(matches!(
+            statements[0].kind,
+            AstKind::Use { alias: Some(_), .. }
+        ));
+        let AstKind::Call { callee, .. } = &statements[1].kind else {
+            panic!("expected call")
+        };
+        assert!(matches!(callee.kind, AstKind::Member { .. }));
+    }
+
+    #[test]
+    fn postfix_member_and_call_syntax_chains_left_to_right() {
+        let (ast, sink) = parse("namespace.make(1).next(2);");
+        assert!(!sink.has_errors());
+        let AstKind::Program { statements } = ast.kind else {
+            panic!("expected program")
+        };
+        let AstKind::Call { callee, .. } = &statements[0].kind else {
+            panic!("expected final call")
+        };
+        let AstKind::Member { object, .. } = &callee.kind else {
+            panic!("expected final member access")
+        };
+        assert!(matches!(object.kind, AstKind::Call { .. }));
+    }
+
+    #[test]
+    fn alias_and_member_syntax_reports_precise_errors() {
+        for source_text in ["use \"a.ucl\" as;", "value.;"] {
             let source = SourceFile::new("t.ucl", source_text);
             let mut sink = DiagnosticSink::new();
             let tokens = Lexer::new(&source).tokenize(&mut sink);

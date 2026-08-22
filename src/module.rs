@@ -7,11 +7,11 @@
 //! detecting import cycles, and summarizing a failed module's diagnostics
 //! back at the importing `use` site.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::diagnostic::{Diagnostic, DiagnosticSink};
-use crate::evaluator::{Environment, Evaluator, Value};
+use crate::evaluator::{Environment, Evaluator, ModuleValue, Value};
 use crate::lexer::{Lexer, unescape_string};
 use crate::parser::Parser;
 use crate::source::{SourceFile, Span};
@@ -19,18 +19,33 @@ use crate::source::{SourceFile, Span};
 /// Per-session module bookkeeping owned by [`Environment`].
 #[derive(Default)]
 pub(crate) struct ModuleState {
-    /// Modules whose evaluation has finished this session, keyed by
-    /// canonical path. A module is evaluated at most once.
-    loaded: HashSet<PathBuf>,
+    /// Completed module exports keyed by canonical path. Retaining the export
+    /// map lets a session reuse one evaluation through flat imports, multiple
+    /// aliases, or a mixture of both forms.
+    loaded: HashMap<PathBuf, ModuleValue>,
+    /// Modules whose exports have already been merged through the legacy flat
+    /// import form. A repeated flat import is intentionally a no-op.
+    flattened: HashSet<PathBuf>,
     /// Modules currently being evaluated, innermost last. Used to detect
     /// and report circular imports.
     loading: Vec<PathBuf>,
 }
 
 impl ModuleState {
-    /// Returns true when the module at `path` has already been evaluated.
-    pub(crate) fn is_loaded(&self, path: &Path) -> bool {
-        self.loaded.contains(path)
+    /// Returns completed exports when the module at `path` has already run.
+    pub(crate) fn exports(&self, path: &Path) -> Option<ModuleValue> {
+        self.loaded.get(path).cloned()
+    }
+
+    /// Returns true when this module's exports were already merged through a
+    /// legacy flat import in the current session.
+    pub(crate) fn was_flattened(&self, path: &Path) -> bool {
+        self.flattened.contains(path)
+    }
+
+    /// Marks a successful legacy flat import as merged.
+    pub(crate) fn mark_flattened(&mut self, path: PathBuf) {
+        self.flattened.insert(path);
     }
 
     /// Returns true when evaluating `path` is already in progress, meaning
@@ -44,12 +59,17 @@ impl ModuleState {
         self.loading.push(path);
     }
 
-    /// Marks `path` as fully evaluated, moving it from the in-progress stack
-    /// to the loaded cache.
-    pub(crate) fn finish(&mut self) {
+    /// Marks the current module as successfully evaluated and caches exports.
+    pub(crate) fn finish(&mut self, exports: ModuleValue) {
         if let Some(path) = self.loading.pop() {
-            self.loaded.insert(path);
+            self.loaded.insert(path, exports);
         }
+    }
+
+    /// Removes the current module from the in-progress stack without caching
+    /// it after evaluation failed.
+    pub(crate) fn abort(&mut self) {
+        self.loading.pop();
     }
 }
 
@@ -95,10 +115,12 @@ fn report_module_failure(
 }
 
 impl Evaluator {
-    /// Evaluates a `use` statement: load, isolate, merge.
+    /// Evaluates a `use` statement by loading or reusing a module's completed
+    /// exports, then either flattening them or binding one namespace alias.
     pub(crate) fn eval_use(
         &self,
         path_span: &Span,
+        alias_span: &Option<Span>,
         source: &SourceFile,
         environment: &mut Environment,
         sink: &mut DiagnosticSink,
@@ -131,74 +153,111 @@ impl Evaluator {
             );
             return Value::Unit;
         }
-        if environment.modules.is_loaded(&module_path) {
-            return Value::Unit;
-        }
 
-        let contents = match std::fs::read_to_string(&module_path) {
-            Ok(contents) => contents,
-            Err(error) => {
-                sink.emit(
-                    Diagnostic::error(format!(
-                        "cannot read module `{}`: {error}",
-                        module_path.display()
-                    ))
-                    .at(*path_span),
-                );
+        let module = if let Some(module) = environment.modules.exports(&module_path) {
+            module
+        } else {
+            let contents = match std::fs::read_to_string(&module_path) {
+                Ok(contents) => contents,
+                Err(error) => {
+                    sink.emit(
+                        Diagnostic::error(format!(
+                            "cannot read module `{}`: {error}",
+                            module_path.display()
+                        ))
+                        .at(*path_span),
+                    );
+                    return Value::Unit;
+                }
+            };
+
+            let module_source = SourceFile::new(module_path.display().to_string(), contents);
+            let mut module_sink = DiagnosticSink::new();
+            let tokens = Lexer::new(&module_source).tokenize(&mut module_sink);
+            if module_sink.has_errors() {
+                report_module_failure(sink, &module_path, &module_sink, *path_span);
                 return Value::Unit;
             }
-        };
-
-        let module_source = SourceFile::new(module_path.display().to_string(), contents);
-        let mut module_sink = DiagnosticSink::new();
-        let tokens = Lexer::new(&module_source).tokenize(&mut module_sink);
-        if module_sink.has_errors() {
-            report_module_failure(sink, &module_path, &module_sink, *path_span);
-            return Value::Unit;
-        }
-        let Some(module_ast) = Parser::new(tokens).parse(&mut module_sink) else {
-            report_module_failure(sink, &module_path, &module_sink, *path_span);
-            return Value::Unit;
-        };
-        if module_sink.has_errors() {
-            report_module_failure(sink, &module_path, &module_sink, *path_span);
-            return Value::Unit;
-        }
-
-        environment.modules.begin(module_path.clone());
-        // Swap in a fresh global scope so the module cannot see (or mutate)
-        // the importer's bindings; its own imports recurse through here.
-        let saved_scopes = environment.isolate_globals();
-        self.eval(
-            &module_ast,
-            &module_source,
-            environment,
-            &mut module_sink,
-            depth + 1,
-        );
-        let returned_early = self.has_pending_return();
-        let module_globals = environment.restore_globals(saved_scopes);
-        environment.modules.finish();
-
-        if module_sink.has_errors() {
-            report_module_failure(sink, &module_path, &module_sink, *path_span);
-            return Value::Unit;
-        }
-        if returned_early {
-            sink.emit(Diagnostic::error("`return` outside of a function").at(*path_span));
-            return Value::Unit;
-        }
-
-        // Flat import: copy every top-level binding of the module into the
-        // importing global scope. A name that is already bound there makes
-        // the whole import ambiguous, which is reported as an error.
-        for (name, value) in module_globals {
-            if !environment.define_global(name.clone(), value) {
-                sink.emit(
-                    Diagnostic::error(format!("module defines `{name}`, which is already bound"))
-                        .at(*path_span),
-                );
+            let Some(module_ast) = Parser::new(tokens).parse(&mut module_sink) else {
+                report_module_failure(sink, &module_path, &module_sink, *path_span);
                 return Value::Unit;
+            };
+            if module_sink.has_errors() {
+                report_module_failure(sink, &module_path, &module_sink, *path_span);
+                return Value::Unit;
+            }
+
+            environment.modules.begin(module_path.clone());
+            // Swap in a fresh global scope so the module cannot see (or mutate)
+            // the importer's bindings; its own imports recurse through here.
+            let saved_scopes = environment.isolate_globals();
+            self.eval(
+                &module_ast,
+                &module_source,
+                environment,
+                &mut module_sink,
+                depth + 1,
+            );
+            let returned_early = self.has_pending_return();
+            let module_globals = environment.restore_globals(saved_scopes);
+
+            if module_sink.has_errors() {
+                environment.modules.abort();
+                report_module_failure(sink, &module_path, &module_sink, *path_span);
+                return Value::Unit;
+            }
+            if returned_early {
+                environment.modules.abort();
+                sink.emit(Diagnostic::error("`return` outside of a function").at(*path_span));
+                return Value::Unit;
+            }
+
+            let exports = ModuleValue::new(module_globals.into_iter().collect::<BTreeMap<_, _>>());
+            environment.modules.finish(exports.clone());
+            exports
+        };
+
+        match alias_span {
+            Some(alias_span) => {
+                let Some(alias) = source.slice(*alias_span) else {
+                    sink.emit(Diagnostic::error("invalid module alias span").at(*alias_span));
+                    return Value::Unit;
+                };
+                if !environment.define_global(alias.to_owned(), Value::Module(module)) {
+                    sink.emit(
+                        Diagnostic::error(format!("module alias `{alias}` is already bound"))
+                            .at(*alias_span),
+                    );
+                }
+            }
+            None => {
+                // Preserve legacy repeated-import behavior while still letting
+                // aliases reuse the same completed export map.
+                if environment.modules.was_flattened(&module_path) {
+                    return Value::Unit;
+                }
+                // Check every collision first so an error never leaves a
+                // partially merged import.
+                if let Some((name, _)) = module
+                    .exports()
+                    .find(|(name, _)| environment.has_global(name))
+                {
+                    sink.emit(
+                        Diagnostic::error(format!(
+                            "module defines `{name}`, which is already bound"
+                        ))
+                        .at(*path_span),
+                    );
+                    return Value::Unit;
+                }
+                for (name, value) in module.exports() {
+                    let inserted = environment.define_global(name.clone(), value.clone());
+                    debug_assert!(
+                        inserted,
+                        "collisions were checked before merging module exports"
+                    );
+                }
+                environment.modules.mark_flattened(module_path.clone());
             }
         }
 
@@ -363,5 +422,106 @@ mod module_tests {
         Parser::new(tokens).parse(&mut sink);
 
         assert!(sink.has_errors(), "the parser must reject nested `use`");
+    }
+
+    #[test]
+    fn aliased_import_binds_a_read_only_namespace() {
+        let dir = TempDir::new();
+        dir.write("math.ucl", "fn double(n) { n * 2; }; let answer = 21;");
+        let (value, sink) = dir.run(
+            "main.ucl",
+            "use \"math.ucl\" as math; math.double(math.answer);",
+        );
+
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Integer(42)));
+    }
+
+    #[test]
+    fn aliases_reuse_one_completed_module_export_map() {
+        let dir = TempDir::new();
+        dir.write("once.ucl", "let value = 21;");
+        let (value, sink) = dir.run(
+            "main.ucl",
+            "use \"once.ucl\" as first; use \"once.ucl\" as second; first.value + second.value;",
+        );
+
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Integer(42)));
+    }
+
+    #[test]
+    fn flat_and_aliased_imports_interoperate_from_the_same_cache() {
+        let dir = TempDir::new();
+        dir.write("math.ucl", "fn double(n) { n * 2; }; let answer = 21;");
+        let (value, sink) = dir.run(
+            "main.ucl",
+            "use \"math.ucl\" as math; use \"math.ucl\"; math.double(answer);",
+        );
+
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Integer(42)));
+    }
+
+    #[test]
+    fn alias_collisions_and_missing_members_are_errors() {
+        let dir = TempDir::new();
+        dir.write("math.ucl", "let answer = 42;");
+        let (_value, sink) = dir.run(
+            "main.ucl",
+            "let math = 0; use \"math.ucl\" as math; use \"math.ucl\" as namespace; namespace.missing;",
+        );
+
+        assert!(sink.has_errors());
+        let messages = sink
+            .iter()
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("alias `math` is already bound"))
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("no exported member `missing`"))
+        );
+    }
+
+    #[test]
+    fn failed_flat_import_does_not_partially_merge_exports() {
+        let dir = TempDir::new();
+        dir.write("values.ucl", "let x = 1; let y = 2;");
+        let (_value, sink) = dir.run("main.ucl", "let y = 7; use \"values.ucl\"; x;");
+
+        assert!(sink.has_errors());
+        let messages = sink
+            .iter()
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("module defines `y`"))
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("undefined variable `x`"))
+        );
+    }
+
+    #[test]
+    fn namespace_access_on_a_non_module_is_an_error() {
+        let dir = TempDir::new();
+        let (_value, sink) = dir.run("main.ucl", "let value = 1; value.answer;");
+
+        assert!(sink.has_errors());
+        assert!(sink.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("cannot access member `answer` on value of type `integer`")
+        }));
     }
 }
