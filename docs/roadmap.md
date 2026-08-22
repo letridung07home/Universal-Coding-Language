@@ -28,7 +28,7 @@ concrete implementation work should be tracked in issues as it is scheduled.
 ## Tooling and ecosystem
 
 - [x] Add property tests and fuzz targets for the lexer and parser
-- [ ] Publish diagnostic and compatibility guarantees
+- [x] Publish diagnostic and compatibility guarantees
 - [x] Design a module and package system
 - [x] Add an interactive REPL
 - [x] Provide release artifacts and installation instructions

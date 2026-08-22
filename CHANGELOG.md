@@ -2,6 +2,23 @@
 
 All notable changes to UCL are documented here.
 
+## 0.8.0 - 2026-08-22
+
+### Added
+
+- Block comments: `/* ... */` may span multiple lines and nest; an
+  unterminated block comment is an error.
+- Relational operators `<`, `>`, `<=`, `>=` now accept two strings,
+  comparing lexicographically by Unicode scalar value. Mixing a string with
+  an integer remains an error.
+- Compatibility guarantees document (`docs/guarantees.md`) covering
+  language, diagnostics, spans, library API, CLI, and module-loading
+  stability expectations.
+
+### Changed
+
+- The specification no longer lists block comments as future work.
+
 ## 0.7.0 - 2026-08-22
 
 ### Added

@@ -23,6 +23,7 @@
 //! similar to how compilers like rustc operate.
 
 use std::cell::{Cell, RefCell};
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -977,15 +978,19 @@ impl Evaluator {
                 }
             }
             Less | Greater | LessEqual | GreaterEqual => {
-                let (a, b) = match (left, right) {
-                    (Value::Integer(a), Value::Integer(b)) => (a, b),
+                let order = match (left, right) {
+                    // Relational ordering is defined for two integers
+                    // numerically and for two strings lexicographically (by
+                    // Unicode scalar value); mixing types is an error.
+                    (Value::Integer(a), Value::Integer(b)) => a.cmp(&b),
+                    (Value::Str(a), Value::Str(b)) => a.as_str().cmp(b.as_str()),
                     (l, r) => return binary_type_error(operator, &l, &r, span, sink),
                 };
                 Value::Boolean(match operator {
-                    Less => a < b,
-                    Greater => a > b,
-                    LessEqual => a <= b,
-                    GreaterEqual => a >= b,
+                    Less => order == Ordering::Less,
+                    Greater => order == Ordering::Greater,
+                    LessEqual => order != Ordering::Greater,
+                    GreaterEqual => order != Ordering::Less,
                     _ => unreachable!("`operator` is restricted to relational operators"),
                 })
             }
@@ -1338,6 +1343,33 @@ mod tests {
             let (value, sink) = eval(source);
             assert!(!sink.has_errors(), "unexpected error for `{source}`");
             assert_eq!(value, Some(Value::Boolean(expected)), "for `{source}`");
+        }
+    }
+
+    #[test]
+    fn relational_operators_compare_strings_lexicographically() {
+        for (source, expected) in [
+            ("\"apple\" < \"banana\";", true),
+            ("\"apple\" < \"apple\";", false),
+            ("\"apple\" <= \"apple\";", true),
+            ("\"b\" > \"a\";", true),
+            ("\"abc\" >= \"abd\";", false),
+            ("\"\" < \"a\";", true),
+            // Ordering is by Unicode scalar value, so multi-byte characters
+            // compare by code point, not byte count.
+            ("\"é\" > \"z\";", true),
+        ] {
+            let (value, sink) = eval(source);
+            assert!(!sink.has_errors(), "unexpected error for `{source}`");
+            assert_eq!(value, Some(Value::Boolean(expected)), "for `{source}`");
+        }
+    }
+
+    #[test]
+    fn mixing_string_and_integer_in_relational_comparison_is_an_error() {
+        for source in ["\"a\" < 1;", "1 <= \"a\";"] {
+            let (_value, sink) = eval(source);
+            assert!(sink.has_errors(), "`{source}` should be an error");
         }
     }
 

@@ -19,6 +19,8 @@ evaluator, command-line interface, and source-aware diagnostics.
 - `if`/`else` conditionals and `while` loops
 - Functions: declarations, literals, closures, and recursion
 - File-based modules via `use "path.ucl";`
+- Line and nesting block comments
+- String comparisons (`<`, `<=`, `>`, `>=`)
 - Named functions, positional parameters, calls, and recursion
 - `let` declarations and assignment
 - Blocks with lexical scoping
@@ -27,6 +29,9 @@ evaluator, command-line interface, and source-aware diagnostics.
 - A library API and the `ucl` command-line program
 
 The implemented language is defined in the [language specification](docs/spec.md).
+What the project keeps stable across releases — language, diagnostics, CLI,
+and library API — is described in the
+[compatibility guarantees](docs/guarantees.md).
 Features not described there should be treated as unsupported.
 
 ## Example

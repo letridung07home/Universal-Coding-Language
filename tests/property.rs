@@ -335,6 +335,30 @@ fn string_concatenation_accumulates_exactly() {
 }
 
 #[test]
+fn string_ordering_agrees_with_lexicographic_comparison() {
+    let mut rng = Rng::new(0x0057_11AB_0000_0001);
+
+    const WORDS: [&str; 8] = ["apple", "app", "banana", "B", "", "é", "z", "a"];
+    for _ in 0..300 {
+        let left = WORDS[rng.below(WORDS.len() as u64) as usize];
+        let right = WORDS[rng.below(WORDS.len() as u64) as usize];
+        let expected = left.cmp(right);
+
+        for (operator, holds) in [
+            ("<", expected == std::cmp::Ordering::Less),
+            (">", expected == std::cmp::Ordering::Greater),
+            ("<=", expected != std::cmp::Ordering::Greater),
+            (">=", expected != std::cmp::Ordering::Less),
+        ] {
+            let source_text = format!("\"{left}\" {operator} \"{right}\";");
+            let (value, had_errors) = eval_expression(&source_text);
+            assert!(!had_errors, "unexpected error for `{source_text}`");
+            assert_eq!(value, Value::Boolean(holds), "mismatch for `{source_text}`");
+        }
+    }
+}
+
+#[test]
 fn function_calls_compute_expected_results() {
     let mut rng = Rng::new(0x0A11_5EED_0A11_5EED);
 

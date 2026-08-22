@@ -41,10 +41,17 @@ terminating newline is not part of the comment. Comments are ignored by the
 lexer and produce no tokens, so a comment may appear wherever whitespace may.
 
 ```
-comment ::= "//" [^\n]*
+comment ::= line-comment | block-comment
+line-comment  ::= "//" [^\n]*
+block-comment ::= "/*" block-comment-body* "*/"
 ```
 
-*Future work.* Block comments (`/* ... */`), which may span multiple lines.
+A line comment runs from `//` to the end of the line. A block comment runs
+from `/*` to the next matching `*/`, may span multiple lines, and *nests*:
+inner `/* ... */` pairs must be closed before the outer comment ends, so code
+containing block comments can itself be commented out. An unterminated block
+comment is an error. Comments may appear wherever whitespace may and are not
+tokenized.
 
 ### 2.4 Identifiers
 
@@ -178,7 +185,7 @@ tightest to loosest below:
 | 7 (highest) | `^` | integer, integer | integer | exponentiation; the exponent must be non-negative |
 | 6 | `*` `/` `%` | integer, integer | integer | checked arithmetic; `/` and `%` by zero are errors |
 | 5 | `+` `-` | both integers or both strings | integer / string | addition or concatenation; checked arithmetic |
-| 4 | `<` `>` `<=` `>=` | integer, integer | boolean | relational comparison |
+| 4 | `<` `>` `<=` `>=` | both integers or both strings | boolean | relational comparison, lexicographic for strings |
 | 3 | `==` `!=` | two integers, booleans, or strings | boolean | equality |
 | 2 | `&` | boolean, boolean | boolean | logical and, short-circuiting |
 | 1 (lowest) | `\|` | boolean, boolean | boolean | logical or, short-circuiting |
@@ -195,7 +202,10 @@ the left-hand side is `false`, and `|` does not evaluate it when the left-hand
 side is `true`. Errors in a skipped operand are therefore not reported.
 
 Equality (`==`, `!=`) is defined for two integers, two booleans, or two
-strings; comparing values of different types is an error.
+strings; comparing values of different types is an error. Relational
+operators (`<`, `>`, `<=`, `>=`) are defined for two integers (numeric
+order) and for two strings (lexicographic order by Unicode scalar value);
+mixing types is an error.
 
 Integer arithmetic is *checked*: addition, subtraction, multiplication,
 negation, and exponentiation that overflow the signed 64-bit range, and

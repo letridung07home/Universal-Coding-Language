@@ -117,6 +117,36 @@ impl<'src> Lexer<'src> {
                 continue;
             }
 
+            // Block comments: `/*` ... `*/` may span multiple lines and
+            // nest, so code containing block comments can itself be
+            // commented out. An unterminated comment is an error.
+            if byte == b'/' && pos + 1 < bytes.len() && bytes[pos + 1] == b'*' {
+                let start = pos;
+                let mut depth = 0usize;
+                while pos < bytes.len() {
+                    if bytes[pos] == b'/' && pos + 1 < bytes.len() && bytes[pos + 1] == b'*' {
+                        depth += 1;
+                        pos += 2;
+                    } else if bytes[pos] == b'*' && pos + 1 < bytes.len() && bytes[pos + 1] == b'/'
+                    {
+                        depth -= 1;
+                        pos += 2;
+                        if depth == 0 {
+                            break;
+                        }
+                    } else {
+                        pos += 1;
+                    }
+                }
+                if depth != 0 {
+                    sink.emit(
+                        Diagnostic::error("unterminated block comment")
+                            .at(Span::new(start, contents.len())),
+                    );
+                }
+                continue;
+            }
+
             // Identifiers and keywords: `[A-Za-z_][A-Za-z0-9_]*`.
             if byte == b'_' || byte.is_ascii_alphabetic() {
                 let start = pos;
@@ -484,6 +514,64 @@ mod tests {
         assert!(!sink.has_errors());
         assert_eq!(tokens.len(), 1);
         assert_eq!(tokens[0].kind, TokenKind::Eof);
+    }
+
+    #[test]
+    fn skips_block_comments_including_across_lines() {
+        let source = SourceFile::new("main.ucl", "1 /* hidden\nstill hidden */ + 2");
+        let mut sink = DiagnosticSink::new();
+        let tokens = Lexer::new(&source).tokenize(&mut sink);
+
+        assert!(!sink.has_errors());
+        let kinds: Vec<TokenKind> = tokens.iter().map(|token| token.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::Integer,
+                TokenKind::Punctuation('+'),
+                TokenKind::Integer,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn block_comments_nest() {
+        let source = SourceFile::new("main.ucl", "/* outer /* inner */ still outer */ 7;");
+        let mut sink = DiagnosticSink::new();
+        let tokens = Lexer::new(&source).tokenize(&mut sink);
+
+        assert!(!sink.has_errors());
+        assert!(tokens.iter().any(|token| token.kind == TokenKind::Integer));
+    }
+
+    #[test]
+    fn an_unterminated_block_comment_is_an_error() {
+        let source = SourceFile::new("main.ucl", "1; /* never closed");
+        let mut sink = DiagnosticSink::new();
+        let tokens = Lexer::new(&source).tokenize(&mut sink);
+
+        assert!(sink.has_errors());
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("unterminated block comment"))
+        );
+        // The tokens before the comment still scan.
+        assert!(tokens.iter().any(|token| token.kind == TokenKind::Integer));
+    }
+
+    #[test]
+    fn a_comment_opener_inside_a_string_literal_stays_literal() {
+        let source = SourceFile::new("main.ucl", "\"/* not a comment */\";");
+        let mut sink = DiagnosticSink::new();
+        let tokens = Lexer::new(&source).tokenize(&mut sink);
+
+        assert!(!sink.has_errors());
+        assert!(
+            tokens
+                .iter()
+                .any(|token| token.kind == TokenKind::StringLiteral)
+        );
     }
 
     #[test]
