@@ -44,7 +44,20 @@ Use `cargo run -- --help` to display command-line help.
 
 ## Requirements
 
-- Rust stable with Cargo (see `rust-toolchain.toml`)
+- Rust stable with Cargo (see `rust-toolchain.toml`) — only needed when
+  building from source; prebuilt binaries are available
+
+## Install
+
+Download a prebuilt Linux binary from the [latest release](https://github.com/letridung07home/Universal-Coding-Language/releases/latest):
+
+```sh
+curl -LO https://github.com/letridung07home/Universal-Coding-Language/releases/latest/download/ucl-x86_64-linux.tar.gz
+tar -xzf ucl-x86_64-linux.tar.gz
+sudo mv ucl-x86_64-linux/ucl /usr/local/bin/
+```
+
+Verify the download against `sha256sums.txt` attached to the same release.
 
 ## Build and run
 

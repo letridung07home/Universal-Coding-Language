@@ -30,7 +30,7 @@ concrete implementation work should be tracked in issues as it is scheduled.
 - [ ] Publish diagnostic and compatibility guarantees
 - [ ] Design a module and package system
 - [ ] Add an interactive REPL
-- [ ] Provide release artifacts and installation instructions
+- [x] Provide release artifacts and installation instructions
 
 ## Completed foundation
 
