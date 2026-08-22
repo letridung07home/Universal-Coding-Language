@@ -52,10 +52,11 @@ comment ::= "//" [^\n]*
 identifier ::= [A-Za-z_] [A-Za-z0-9_]*
 ```
 
-Identifiers name bindings. The words `let`, `fn`, `true`, `false`, `if`, `else`,
-and `while` are reserved keywords: the lexer produces dedicated keyword tokens
-for them, and they cannot be used as identifiers. The parser recognizes
-declarations from their keyword tokens rather than from token shape.
+Identifiers name bindings. The words `let`, `fn`, `true`, `false`, `if`,
+`else`, `while`, `return`, and `use` are reserved keywords: the lexer produces
+dedicated keyword tokens for them, and they cannot be used as identifiers. The
+parser recognizes declarations from their keyword tokens rather than from
+token shape.
 
 ### 2.5 String literals
 
@@ -297,6 +298,7 @@ statement ::= declaration
             | while-statement
             | expression-statement
             | block
+import    ::= "use" string-literal
 ```
 
 Statements are separated by semicolons. A trailing semicolon after the final
@@ -338,7 +340,31 @@ without one the call evaluates to `unit`. `return` unwinds through nested
 blocks and loop bodies. A `return` that executes outside any function call is
 an error.
 
-### 5.4 Assignment
+### 5.4 Imports
+
+```
+import ::= "use" string-literal ";"
+```
+
+A `use` statement imports a module from another source file. It may appear
+only at the top level of a program; placing one inside a block or function
+body is an error. The path is a string literal interpreted relative to the
+directory of the importing file (in an interactive session, relative to the
+process's working directory).
+
+Importing evaluates the module file exactly once per session, in an isolated
+global scope: the module cannot see or mutate the importer's bindings, and it
+resolves its own `use` statements recursively. After evaluation succeeds,
+every top-level binding of the module — including those it imported itself —
+is copied into the importing global scope. If any copied name is already
+bound there, the whole import fails with an error.
+
+Errors during loading are reported anchored at the `use` site: unreadable
+files, syntax errors inside the module, and circular import chains all abort
+the import; a program that reports errors still runs its earlier statements
+in interactive sessions but produces no value in file mode.
+
+### 5.5 Assignment
 
 ```
 assignment ::= identifier "=" expression
@@ -350,13 +376,13 @@ an unbound name is an error; assignment does not create a binding. The
 assignment expression evaluates to the assigned value. The left-hand side must
 be an identifier; any other target is an error.
 
-### 5.5 Expression statement
+### 5.6 Expression statement
 
 An expression may stand alone as a statement; its value is computed and then
 discarded (except that the value of a program's last statement is the
 program's result).
 
-### 5.6 Blocks and scope
+### 5.7 Blocks and scope
 
 ```
 block ::= "{" statement* "}"
@@ -403,6 +429,9 @@ source span. Errors include:
 - calls to non-function values or calls with an incorrect argument count;
 - duplicate function parameters;
 - a `return` statement that executes outside any function call;
+- a `use` statement outside the top level of a program, with a non-string
+  path, targeting an unreadable file, forming a circular import chain, or
+  exporting a name that collides with an existing binding;
 - a loop exceeding the maximum iteration count;
 - a function call exceeding the maximum active-call depth (currently 128);
 - expression nesting that exceeds the parser's or evaluator's depth limit.

@@ -22,6 +22,8 @@ pub enum Keyword {
     Function,
     /// The `return` statement keyword.
     Return,
+    /// The `use` module-import keyword.
+    Use,
 }
 
 /// The kind of a lexical token.
@@ -133,6 +135,7 @@ impl<'src> Lexer<'src> {
                     "while" => TokenKind::Keyword(Keyword::While),
                     "fn" => TokenKind::Keyword(Keyword::Function),
                     "return" => TokenKind::Keyword(Keyword::Return),
+                    "use" => TokenKind::Keyword(Keyword::Use),
                     _ => TokenKind::Ident,
                 };
                 tokens.push(Token {

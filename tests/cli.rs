@@ -357,3 +357,82 @@ fn repl_incomplete_input_completes_across_lines() {
         "a completed entry must not report errors: {stderr}"
     );
 }
+
+fn programs_can_import_local_modules_setup() -> std::path::PathBuf {
+    let dir = temp_dir();
+    fs::create_dir_all(&dir).expect("create temp dir");
+    dir
+}
+
+#[test]
+fn programs_can_import_local_modules() {
+    let dir = programs_can_import_local_modules_setup();
+    fs::write(dir.join("math.ucl"), "fn double(n) { n * 2; };").expect("write module");
+    let main_path = dir.join("main.ucl");
+    fs::write(&main_path, "use \"math.ucl\";\ndouble(21);").expect("write main");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_ucl"))
+        .arg(&main_path)
+        .output()
+        .expect("run the ucl binary");
+
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "42");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_circular_import_is_reported_with_an_excerpt() {
+    let dir = programs_can_import_local_modules_setup();
+    fs::write(dir.join("a.ucl"), "use \"b.ucl\";").expect("write a");
+    fs::write(dir.join("b.ucl"), "use \"a.ucl\";").expect("write b");
+    let main_path = dir.join("main.ucl");
+    fs::write(&main_path, "use \"a.ucl\";\n1;").expect("write main");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_ucl"))
+        .arg(&main_path)
+        .output()
+        .expect("run the ucl binary");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("circular import"), "stderr: {stderr}");
+    assert!(stderr.contains("-->"), "an excerpt is rendered: {stderr}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Returns a unique temporary directory path (not yet created).
+fn temp_dir() -> std::path::PathBuf {
+    let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("ucl-cli-dir-{}-{id}", std::process::id()))
+}
+
+#[test]
+fn repl_use_resolves_modules_against_the_working_directory() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let dir = temp_dir();
+    fs::create_dir_all(&dir).expect("create temp dir");
+    fs::write(dir.join("helper.ucl"), "let magic = 99;").expect("write module");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_ucl"))
+        .current_dir(&dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("run the ucl binary");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin is piped")
+        .write_all(b"use \"helper.ucl\";\nmagic;\n")
+        .expect("write REPL input");
+    let output = child.wait_with_output().expect("repl exits");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("99"), "stdout: {stdout}");
+    let _ = fs::remove_dir_all(&dir);
+}

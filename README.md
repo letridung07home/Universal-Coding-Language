@@ -18,6 +18,7 @@ evaluator, command-line interface, and source-aware diagnostics.
 - Short-circuiting logical operators
 - `if`/`else` conditionals and `while` loops
 - Functions: declarations, literals, closures, and recursion
+- File-based modules via `use "path.ucl";`
 - Named functions, positional parameters, calls, and recursion
 - `let` declarations and assignment
 - Blocks with lexical scoping

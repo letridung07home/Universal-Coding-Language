@@ -2,6 +2,23 @@
 
 All notable changes to UCL are documented here.
 
+## 0.7.0 - 2026-08-22
+
+### Added
+
+- File-based modules: `use "path.ucl";` imports another source file. Paths
+  resolve relative to the importing file's directory (working directory in
+  interactive sessions). A module is evaluated once per session in an
+  isolated global scope, and its top-level bindings — including names it
+  imported itself — are copied into the importer's global scope. Name
+  collisions abort the import with an error.
+- Circular imports are detected and reported instead of looping; unreadable
+  files and errors inside a module are reported anchored at the `use` site.
+- **Breaking:** `use` is now a reserved keyword and can no longer be used as
+  an identifier. Imports are only valid at the top level of a program.
+- The evaluator now reads module files from the filesystem when evaluating a
+  `use` statement.
+
 ## 0.6.0 - 2026-08-22
 
 ### Added

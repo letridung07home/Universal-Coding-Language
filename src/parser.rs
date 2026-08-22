@@ -139,6 +139,17 @@ pub enum AstKind {
         /// The returned expression, if any. A bare `return` returns unit.
         value: Option<Box<AstNode>>,
     },
+    /// An import statement: `use "path.ucl";`.
+    ///
+    /// The path span covers the string literal; the decoded text is
+    /// recovered from the source via [`crate::lexer::unescape_string`] at
+    /// evaluation time. Only valid at the top level of a program.
+    Use {
+        /// Span of the `use` keyword.
+        keyword: Span,
+        /// Span of the module path string literal.
+        path: Span,
+    },
 }
 
 /// An infix binary operator.
@@ -258,12 +269,27 @@ impl Parser {
             }
 
             let statement_start = self.cursor;
-            match self.parse_statement(sink) {
-                Some(statement) => statements.push(statement),
-                None => {
-                    self.recover_statement();
-                    if self.cursor == statement_start && !self.at_eof() {
-                        self.advance();
+            // `use` is only valid at the top level of a program, so it is
+            // recognized here rather than in `parse_statement`, where it
+            // would also be accepted inside blocks and function bodies.
+            if self.check_keyword(Keyword::Use) {
+                match self.parse_use(sink) {
+                    Some(statement) => statements.push(statement),
+                    None => {
+                        self.recover_statement();
+                        if self.cursor == statement_start && !self.at_eof() {
+                            self.advance();
+                        }
+                    }
+                }
+            } else {
+                match self.parse_statement(sink) {
+                    Some(statement) => statements.push(statement),
+                    None => {
+                        self.recover_statement();
+                        if self.cursor == statement_start && !self.at_eof() {
+                            self.advance();
+                        }
                     }
                 }
             }
@@ -281,6 +307,22 @@ impl Parser {
         Some(AstNode::new(
             Span::new(start, end),
             AstKind::Program { statements },
+        ))
+    }
+
+    /// Parses an import statement: `use "path";`.
+    fn parse_use(&mut self, sink: &mut DiagnosticSink) -> Option<AstNode> {
+        let keyword = self.advance().span;
+
+        if !self.check_kind(TokenKind::StringLiteral) {
+            self.error_current("expected a module path string after `use`", sink);
+            return None;
+        }
+        let path = self.advance().span;
+
+        Some(AstNode::new(
+            Span::new(keyword.start, path.end),
+            AstKind::Use { keyword, path },
         ))
     }
 
@@ -1363,6 +1405,38 @@ mod tests {
             parser.parse(&mut sink);
             assert!(!sink.has_errors(), "for `{source_text}`");
             assert!(!parser.is_incomplete(), "for `{source_text}`");
+        }
+    }
+
+    #[test]
+    fn parses_use_statements_with_string_paths() {
+        let (ast, sink) = parse("use \"lib/math.ucl\";");
+        assert!(!sink.has_errors());
+        let AstKind::Program { statements } = ast.kind else {
+            panic!("expected program")
+        };
+        assert!(matches!(statements[0].kind, AstKind::Use { .. }));
+    }
+
+    #[test]
+    fn use_requires_a_string_path() {
+        for source_text in ["use math;", "use;", "use \"a\" + \"b\";"] {
+            let source = SourceFile::new("t.ucl", source_text);
+            let mut sink = DiagnosticSink::new();
+            let tokens = Lexer::new(&source).tokenize(&mut sink);
+            Parser::new(tokens).parse(&mut sink);
+            assert!(sink.has_errors(), "`{source_text}` should be rejected");
+        }
+    }
+
+    #[test]
+    fn use_is_rejected_inside_blocks_and_functions() {
+        for source_text in ["{ use \"a.ucl\"; }", "fn f() { use \"a.ucl\"; };"] {
+            let source = SourceFile::new("t.ucl", source_text);
+            let mut sink = DiagnosticSink::new();
+            let tokens = Lexer::new(&source).tokenize(&mut sink);
+            Parser::new(tokens).parse(&mut sink);
+            assert!(sink.has_errors(), "`{source_text}` should be rejected");
         }
     }
 }
