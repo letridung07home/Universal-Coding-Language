@@ -73,5 +73,7 @@ jobs:
         run: cargo install cargo-fuzz --locked
 
       - name: Fuzz ${{ matrix.target }} (10 minutes)
-        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=600
+        # Four workers saturate the runner's CPU cores: same wall-clock
+        # budget as a single-worker run, roughly four times the executions.
+        run: cargo +nightly fuzz run ${{ matrix.target }} -- -jobs=4 -workers=4 -max_total_time=600
         working-directory: fuzz
