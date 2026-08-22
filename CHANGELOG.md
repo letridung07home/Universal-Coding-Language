@@ -9,6 +9,9 @@ All notable changes to UCL are documented here.
 - Internal refactor: all module-loading logic (`use` statements, path
   resolution, cycle detection, import merging) moved from `evaluator.rs`
   into a dedicated `module.rs`. No public API or behavior change.
+- Fixed a brittle REPL test assertion that matched any `2` in the output
+  (including the version banner) instead of checking that nothing runs
+  after `:quit`.
 
 ## 0.8.1 - 2026-08-22
 

@@ -339,10 +339,13 @@ fn repl_reset_forgets_bindings() {
 fn repl_quit_command_ends_the_session() {
     let (stdout, _stderr, code) = run_repl(":quit\n1 + 1;\n");
     assert_eq!(code, 0);
-    assert!(
-        !stdout.contains('2'),
-        "nothing evaluates after :quit: {stdout}"
+    // Exactly one prompt, and nothing evaluated after `:quit`.
+    assert_eq!(
+        stdout.matches(">>>").count(),
+        1,
+        ":quit must end the session immediately: {stdout}"
     );
+    assert!(stdout.ends_with(">>> "), "no output after :quit: {stdout}");
 }
 
 #[test]
