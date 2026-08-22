@@ -2,6 +2,28 @@
 
 All notable changes to UCL are documented here.
 
+## 1.0.0 - 2026-08-22
+
+The first stable release. The language, command-line interface, Rust library
+API, and error categories described in `docs/guarantees.md` are now covered by
+compatibility guarantees in full: breaking changes ship only in major
+versions.
+
+No code changes since 0.8.2; this release converts documentation caveats into
+promises.
+
+### Changed
+
+- The compatibility guarantees now apply without the pre-1.0 escape hatch:
+  programs that run in this release keep running, and error categories are a
+  stable interface.
+- Exact diagnostic wording remains deliberately non-contractual; tools should
+  use the library API.
+- The REPL's user-facing behavior (prompts, banner, meta commands) is
+  documented as stable de-facto behavior.
+- README, specification status, roadmap, and development guide updated to
+  reflect the stable release.
+
 ## 0.8.2 - 2026-08-22
 
 ### Changed

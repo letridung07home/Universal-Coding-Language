@@ -27,7 +27,8 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-features
 ```
 
-The CI workflow runs formatting, linting, tests, and a locked release build.
+The CI workflow runs formatting, linting, tests, a warning-free documentation
+build, a fuzz-target compilation check, and a locked release build.
 
 ## Project architecture
 
@@ -42,7 +43,11 @@ source text -> lexer -> parser -> evaluator
 - `lexer.rs` converts source text into tokens.
 - `parser.rs` converts tokens into an abstract syntax tree.
 - `evaluator.rs` executes the abstract syntax tree.
-- `main.rs` provides the `ucl` command-line interface and diagnostic rendering.
+- `module.rs` loads `use` imports: path resolution, cycle detection,
+  evaluation isolation, and binding merges.
+- `render.rs` renders diagnostics with source excerpts.
+- `repl.rs` runs interactive sessions with a persistent environment.
+- `main.rs` provides the `ucl` command-line interface.
 
 ## Property testing and fuzzing
 

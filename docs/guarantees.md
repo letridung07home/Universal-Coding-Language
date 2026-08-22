@@ -2,15 +2,14 @@
 
 This document describes what the UCL project promises to keep stable across
 releases, and what may change. It applies to the language, the `ucl` command
-line interface, and the Rust library crate.
+line interface, and the Rust library crate. These guarantees apply in full as
+of version 1.0.0.
 
 ## Versioning policy
 
-UCL uses semantic versioning. While the major version is `0`, minor releases
-may contain breaking changes; every breaking change is listed under a
-**Breaking** heading in the changelog entry for the release that introduces
-it. Once version 1.0 is reached, breaking changes will only ship in major
-versions.
+UCL uses semantic versioning. Breaking changes ship only in major versions;
+every breaking change is listed under a **Breaking** heading in the changelog
+entry for the release that introduces it.
 
 The crate declares a minimum supported Rust version (`rust-version` in
 `Cargo.toml`, currently 1.85, the first release supporting edition 2024).
@@ -26,8 +25,7 @@ guaranteed:
   with the same result in later releases, except where a changelog entry
   declares a breaking language change.
 - The set of reserved keywords only grows; a keyword can never become an
-  identifier again without a major-version (or explicitly declared 0.x)
-  breaking change.
+  identifier again without a major-version breaking change.
 
 What is *not* guaranteed between releases:
 
@@ -47,7 +45,7 @@ rendered to stderr with a source excerpt. Guaranteed:
   of language compatibility: if something is an error in one patch release
   it does not silently become valid code.
 
-Not yet guaranteed (until 1.0):
+Explicitly *not* guaranteed:
 
 - Exact diagnostic wording, severity choices, span extents, and excerpt
   layout may change in any release. Tools should not parse diagnostic text;
@@ -87,9 +85,18 @@ Stable across releases:
 - Running `ucl` with no arguments starts the interactive REPL; `--help`
   and `--version` print help and version information respectively.
 
-Interactive-session details (prompt strings, banner text, meta-command
-names) are presented but not yet contractual; the guarantees above apply
-fully once version 1.0 is released.
+### Interactive sessions
+
+The REPL's user-facing behavior is stable in practice and documented here,
+but it is informational rather than a formal compatibility surface:
+
+- The primary prompt is `>>> `; a continuation prompt `... ` appears while
+  an entry is incomplete.
+- The banner names the version on startup.
+- Meta commands: `:help` prints available commands, `:reset` discards all
+  bindings, `:quit` (or `:exit`) ends the session, and end-of-input exits.
+- Each entry evaluates against a persistent environment; errors do not
+  end the session.
 
 ## Module loading
 

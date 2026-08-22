@@ -42,3 +42,17 @@ concrete implementation work should be tracked in issues as it is scheduled.
 - [x] Add the `ucl` command-line interface
 - [x] Render diagnostics with source excerpts
 - [x] Add integration tests and CI checks
+
+## After 1.0
+
+Version 1.0 marks the first stable release: the language, CLI, library API,
+and error categories are covered by the
+[compatibility guarantees](guarantees.md). Future directions, sketched rather
+than scheduled:
+
+- Built-in functions (for example `len` for strings)
+- Namespace member access for imports (`module.name`) alongside flat imports
+- A richer module/package story beyond local files
+- Broader platform coverage for release artifacts
+
+Each of these is additive; none would require a breaking change.

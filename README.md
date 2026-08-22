@@ -2,15 +2,17 @@
 
 A universal coding language that excels in every task possible.
 
-UCL is currently implemented as an experimental, expression-oriented language
-in Rust. The project provides a small interpreter with a lexer, parser,
-evaluator, command-line interface, and source-aware diagnostics.
+UCL is a small, expression-oriented language implemented in Rust. The project
+provides an interpreter with a lexer, parser, evaluator, file-based modules,
+an interactive REPL, a command-line interface, and source-aware diagnostics.
 
-> [!IMPORTANT]
-> UCL is an early-stage project, not yet a general-purpose or production-ready
-> language. Syntax and public Rust APIs may change without notice.
+> [!NOTE]
+> UCL 1.0 is the first stable release: the language, CLI, library API, and
+> error categories are covered by [compatibility guarantees](docs/guarantees.md).
+> It remains a deliberately small language — not a batteries-included
+> general-purpose scripting environment.
 
-## Current features
+## Features
 
 - Signed 64-bit integers, booleans, and strings
 - Checked arithmetic, comparison, and equality operators
@@ -26,7 +28,7 @@ evaluator, command-line interface, and source-aware diagnostics.
 - Error diagnostics with source excerpts
 - A library API and the `ucl` command-line program
 
-The implemented language is defined in the [language specification](docs/spec.md).
+The language is defined in the [language specification](docs/spec.md).
 What the project keeps stable across releases — language, diagnostics, CLI,
 and library API — is described in the
 [compatibility guarantees](docs/guarantees.md).
@@ -54,7 +56,7 @@ interactive session by running `ucl` without arguments:
 
 ```console
 $ cargo run
-UCL 0.6.0 interactive mode — type :help for help.
+UCL 1.0.0 interactive mode — type :help for help.
 >>> let x = 40;
 >>> x + 2;
 42
@@ -103,27 +105,33 @@ architecture, and contribution instructions.
 .
 ├── docs/
 │   ├── development.md   # Development workflow and contribution guide
-│   ├── roadmap.md       # Planned milestones and project direction
-│   └── spec.md          # Implemented language syntax and semantics
+│   ├── guarantees.md    # Compatibility guarantees
+│   ├── roadmap.md       # Milestones and project direction
+│   └── spec.md          # Language syntax and semantics
 ├── src/
-│   ├── main.rs          # `ucl` CLI
+│   ├── main.rs          # `ucl` CLI entry point
 │   ├── lib.rs           # Public Rust API
 │   ├── source.rs        # Source files, byte positions, and spans
 │   ├── diagnostic.rs    # Structured diagnostics
 │   ├── lexer.rs         # Source text to tokens
 │   ├── parser.rs        # Tokens to AST
-│   └── evaluator.rs     # AST evaluation
+│   ├── evaluator.rs     # AST evaluation
+│   ├── module.rs        # `use` statement loading and import machinery
+│   ├── render.rs        # Diagnostic rendering with source excerpts
+│   └── repl.rs          # Interactive session loop
 ├── tests/
-│   ├── cli.rs           # End-to-end CLI tests
+│   ├── cli.rs           # End-to-end CLI and REPL tests
+│   ├── property.rs      # Property-based tests
 │   └── smoke.rs         # Public API smoke tests
-└── .github/workflows/ci.yml
+└── .github/workflows/   # CI, release, and fuzz workflows
 ```
 
 ## Roadmap
 
-Current priorities are interpreter correctness, stable language semantics, and
-stronger testing. See the [project roadmap](docs/roadmap.md) for planned
-milestones.
+Version 1.0 marks the first stable release; the guarantees above now apply in
+full. Future directions — built-in functions, namespace member access for
+imports, and a package story — are sketched in the
+[project roadmap](docs/roadmap.md).
 
 ## Contributing
 

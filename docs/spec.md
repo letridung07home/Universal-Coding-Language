@@ -1,8 +1,8 @@
 # Universal Coding Language (UCL) — Language Specification
 
-> **Status:** initial version. This document codifies the subset of the
-> language implemented by the current compiler pipeline (lexer → parser →
-> evaluator).
+> **Status:** stable as of version 1.0. This document specifies the language
+> implemented by the compiler pipeline (lexer → parser → evaluator) and is
+> the normative definition of that language.
 
 ## 1. Overview
 
