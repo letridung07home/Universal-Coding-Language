@@ -600,4 +600,80 @@ mod tests {
                 .any(|diagnostic| diagnostic.message.contains("nesting is too deep"))
         );
     }
+
+    #[test]
+    fn reports_a_missing_identifier_after_let() {
+        let (_ast, sink) = parse("let = 5;");
+
+        assert!(sink.has_errors());
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("after `let`"))
+        );
+    }
+
+    #[test]
+    fn reports_a_missing_equals_in_a_declaration() {
+        let (_ast, sink) = parse("let x 5;");
+
+        assert!(sink.has_errors());
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("expected `=`"))
+        );
+    }
+
+    #[test]
+    fn reports_an_unbalanced_parenthesis() {
+        let (_ast, sink) = parse("(1 + 2;");
+
+        assert!(sink.has_errors());
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("expected `)`"))
+        );
+    }
+
+    #[test]
+    fn reports_an_unbalanced_brace() {
+        let (_ast, sink) = parse("{ 1 + 2;");
+
+        assert!(sink.has_errors());
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("expected `}`"))
+        );
+    }
+
+    #[test]
+    fn reports_a_missing_semicolon_between_statements() {
+        let (_ast, sink) = parse("1 2;");
+
+        assert!(sink.has_errors());
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("expected `;`"))
+        );
+    }
+
+    #[test]
+    fn empty_statements_are_ignored() {
+        let (_ast, sink) = parse(";;;");
+
+        assert!(!sink.has_errors());
+    }
+
+    #[test]
+    fn unary_operators_apply_to_groups() {
+        let (ast, sink) = parse("-(1 + 2);");
+
+        assert!(!sink.has_errors());
+        let AstKind::Program { statements } = ast.kind else {
+            panic!("expected program")
+        };
+        assert!(matches!(
+            statements[0].kind,
+            AstKind::Unary { operator: '-', .. }
+        ));
+    }
 }

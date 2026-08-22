@@ -606,4 +606,143 @@ mod tests {
         assert!(!sink.has_errors());
         assert_eq!(value, Value::Integer(-1));
     }
+
+    #[test]
+    fn reports_overflow_on_addition() {
+        let (_value, sink) = eval("9223372036854775807 + 1;");
+        assert!(sink.has_errors());
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("integer overflow"))
+        );
+    }
+
+    #[test]
+    fn reports_overflow_on_subtraction() {
+        let (_value, sink) = eval("-9223372036854775807 - 2;");
+        assert!(sink.has_errors());
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("integer overflow"))
+        );
+    }
+
+    #[test]
+    fn reports_overflow_on_multiplication() {
+        let (_value, sink) = eval("9223372036854775807 * 2;");
+        assert!(sink.has_errors());
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("integer overflow"))
+        );
+    }
+
+    #[test]
+    fn reports_remainder_by_zero() {
+        let (_value, sink) = eval("5 % 0;");
+        assert!(sink.has_errors());
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("division by zero"))
+        );
+    }
+
+    #[test]
+    fn reports_negative_exponents() {
+        let (_value, sink) = eval("2 ^ -1;");
+        assert!(sink.has_errors());
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("negative exponents"))
+        );
+    }
+
+    #[test]
+    fn reports_unary_type_errors() {
+        for source in ["-(1 < 2);", "!5;"] {
+            let (_value, sink) = eval(source);
+            assert!(sink.has_errors(), "expected an error for `{source}`");
+            assert!(
+                sink.iter()
+                    .any(|diagnostic| diagnostic.message.contains("cannot apply")),
+                "expected a type error for `{source}`"
+            );
+        }
+    }
+
+    #[test]
+    fn reports_binary_type_errors() {
+        for source in ["1 + (1 < 2);", "1 & 2;", "1 < 2 < 3;"] {
+            let (_value, sink) = eval(source);
+            assert!(sink.has_errors(), "expected an error for `{source}`");
+            assert!(
+                sink.iter()
+                    .any(|diagnostic| diagnostic.message.contains("cannot apply")),
+                "expected a type error for `{source}`"
+            );
+        }
+    }
+
+    #[test]
+    fn reports_invalid_assignment_targets() {
+        let (_value, sink) = eval("(x) = 5;");
+        assert!(sink.has_errors());
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("invalid assignment target"))
+        );
+    }
+
+    #[test]
+    fn reports_out_of_range_integer_literals() {
+        let (_value, sink) = eval("9223372036854775808;");
+        assert!(sink.has_errors());
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("out of range"))
+        );
+    }
+
+    #[test]
+    fn evaluates_logical_or_on_booleans() {
+        let (value, sink) = eval("1 > 2 | 2 < 3;");
+        assert!(!sink.has_errors());
+        assert_eq!(value, Value::Boolean(true));
+    }
+
+    #[test]
+    fn assignment_inside_a_block_updates_the_outer_binding() {
+        let (value, sink) = eval("let x = 5; { x = 10; }; x;");
+        assert!(!sink.has_errors());
+        assert_eq!(value, Value::Integer(10));
+    }
+
+    #[test]
+    fn assignment_to_a_shadowed_binding_stays_in_its_scope() {
+        let (value, sink) = eval("let x = 5; { let x = 10; x = 20; }; x;");
+        assert!(!sink.has_errors());
+        assert_eq!(value, Value::Integer(5));
+    }
+
+    #[test]
+    fn evaluates_moderately_long_flat_binary_chains() {
+        let source_text = vec!["1"; 100].join(" + ") + ";";
+        let (value, sink) = eval(&source_text);
+        assert!(!sink.has_errors());
+        assert_eq!(value, Value::Integer(100));
+    }
+
+    #[test]
+    #[ignore = "known limitation: evaluator depth guard rejects long flat chains"]
+    fn evaluates_long_flat_binary_chains_within_the_parser_limit() {
+        // A flat, left-associative chain adds evaluator depth without adding
+        // parser nesting, so the parser accepts it while the evaluator's
+        // `MAX_EVAL_DEPTH` guard (1024) currently rejects it. Remove the
+        // `#[ignore]` once the depth limits are made consistent.
+        let terms = 2_000;
+        let source_text = vec!["1"; terms].join(" + ") + ";";
+        let (value, sink) = eval(&source_text);
+        assert!(!sink.has_errors());
+        assert_eq!(value, Value::Integer(terms as i64));
+    }
 }
