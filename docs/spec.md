@@ -2,8 +2,7 @@
 
 > **Status:** initial version. This document codifies the subset of the
 > language implemented by the current compiler pipeline (lexer → parser →
-> evaluator). Sections marked *future work* describe features that are not yet
-> implemented.
+> evaluator).
 
 ## 1. Overview
 
@@ -214,6 +213,8 @@ The `-` operator remains integer-only; there is no string repetition.
 
 Applying a binary operator to operands of the wrong type is an error.
 
+### 4.3 Function calls
+
 A call expression has the form `callee(argument, ...)`. Calls bind more tightly
 than unary and binary operators, so `-negate(2)` means `-(negate(2))`. Calls may
 be chained (`f(x)(y)`), since any expression that produces a function may be
@@ -227,7 +228,7 @@ A function evaluates to the value of an executed `return` statement, or the
 value of the final statement in its body when no `return` ran.
 
 At call time a function sees three layers of bindings: the *current* global
-scope, its own captured bindings (§4.6), and a fresh scope holding its
+scope, its own captured bindings (§4.4), and a fresh scope holding its
 parameters. It never resolves bindings from the caller's local blocks; UCL has
 no dynamic scoping. Assignments to globals made by a function persist after
 the call. A top-level function's own name resolves dynamically at call time,
