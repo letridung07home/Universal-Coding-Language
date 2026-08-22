@@ -2,6 +2,10 @@ name: CI
 
 on:
   workflow_dispatch:
+    inputs:
+      fuzz_minutes:
+        description: "Fuzzing budget per target in minutes"
+        default: "1"
   push:
     branches: [main]
   pull_request:
@@ -72,8 +76,19 @@ jobs:
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
 
-      - name: Fuzz ${{ matrix.target }} (10 minutes)
+      - name: Set fuzzing budget
+        id: budget
+        # Manual dispatches default to a 1-minute smoke test; the nightly
+        # schedule always gets the full 10 minutes.
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "seconds=600" >> "$GITHUB_OUTPUT"
+          else
+            echo "seconds=$(( ${{ inputs.fuzz_minutes || 1 }} * 60 ))" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Fuzz ${{ matrix.target }} (${{ steps.budget.outputs.seconds }} seconds)
         # Four workers saturate the runner's CPU cores: same wall-clock
         # budget as a single-worker run, roughly four times the executions.
-        run: cargo +nightly fuzz run ${{ matrix.target }} -- -jobs=4 -workers=4 -max_total_time=600
+        run: cargo +nightly fuzz run ${{ matrix.target }} -- -jobs=4 -workers=4 -max_total_time=${{ steps.budget.outputs.seconds }}
         working-directory: fuzz
