@@ -2,16 +2,9 @@ name: CI
 
 on:
   workflow_dispatch:
-    inputs:
-      fuzz_minutes:
-        description: "Fuzzing budget per target in minutes"
-        default: "1"
   push:
     branches: [main]
   pull_request:
-  schedule:
-    # Daily at 03:00 UTC
-    - cron: "0 3 * * *"
 
 env:
   CARGO_TERM_COLOR: always
@@ -50,45 +43,3 @@ jobs:
 
       - name: Build release binary
         run: cargo build --release --locked
-
-  fuzz-smoke:
-    name: Fuzz smoke test (${{ matrix.target }})
-    runs-on: ubuntu-latest
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [lexer, parser, pipeline]
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-
-      - name: Install Rust nightly toolchain
-        uses: dtolnay/rust-toolchain@nightly
-
-      - name: Cache build artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            .
-            fuzz
-
-      - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz --locked
-
-      - name: Set fuzzing budget
-        id: budget
-        # Manual dispatches default to a 1-minute smoke test; the nightly
-        # schedule always gets the full 10 minutes.
-        run: |
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            echo "seconds=600" >> "$GITHUB_OUTPUT"
-          else
-            echo "seconds=$(( ${{ inputs.fuzz_minutes || 1 }} * 60 ))" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Fuzz ${{ matrix.target }} (${{ steps.budget.outputs.seconds }} seconds)
-        # Four workers saturate the runner's CPU cores: same wall-clock
-        # budget as a single-worker run, roughly four times the executions.
-        run: cargo +nightly fuzz run ${{ matrix.target }} -- -jobs=4 -workers=4 -max_total_time=${{ steps.budget.outputs.seconds }}
-        working-directory: fuzz

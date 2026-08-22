@@ -71,7 +71,11 @@ cargo +nightly fuzz run pipeline
 ```
 
 `fuzz/` is a standalone crate and is not built by the normal `cargo build`,
-`cargo test`, or `cargo clippy` invocations at the repository root.
+`cargo test`, or `cargo clippy` invocations at the repository root. The CI
+workflow compiles the fuzz targets on every push, and the separate **Fuzz**
+workflow runs them nightly for ten minutes per target (four parallel workers
+each); it can also be triggered manually from the Actions tab, where the
+per-target budget is configurable and defaults to one minute.
 
 ## Contributing
 
