@@ -2,6 +2,34 @@
 
 All notable changes to UCL are documented here.
 
+## 0.6.0 - 2026-08-22
+
+### Added
+
+- Interactive REPL: running `ucl` without a file starts a session
+  (`>>> ` prompt) where bindings persist across inputs. Definitions that end
+  in the middle of a construct prompt a continuation line (`... `) instead of
+  reporting an error; runtime and syntax errors do not end the session. Meta
+  commands: `:help`, `:reset`, `:quit` (Ctrl-D also exits).
+- `Environment` is now public with `Evaluator::evaluate_in`, allowing
+  library users to evaluate many programs against one persistent set of
+  bindings.
+- `Parser::is_incomplete` reports whether the last parse stopped because the
+  input ended mid-construct rather than because of genuinely malformed
+  syntax.
+
+### Changed
+
+- Function values now carry their defining source, so a function created in
+  one program can be called from another (essential for multi-line REPL
+  sessions). **Breaking (library API):** `SourceFile` gained `Clone`/`Debug`
+  derives, and `FunctionValue` gained a private source field.
+
+### Removed
+
+- Running `ucl` with no arguments no longer prints a usage error; it starts
+  the interactive REPL instead.
+
 ## 0.5.0 - 2026-08-22
 
 ### Added

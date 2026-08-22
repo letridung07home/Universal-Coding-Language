@@ -30,7 +30,7 @@ concrete implementation work should be tracked in issues as it is scheduled.
 - [x] Add property tests and fuzz targets for the lexer and parser
 - [ ] Publish diagnostic and compatibility guarantees
 - [ ] Design a module and package system
-- [ ] Add an interactive REPL
+- [x] Add an interactive REPL
 - [x] Provide release artifacts and installation instructions
 
 ## Completed foundation

@@ -80,11 +80,26 @@ pub enum Value {
 /// recurse by looking themselves up — while non-global bindings visible at
 /// creation are captured by value: later changes to those bindings do not
 /// affect an already-created function.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct FunctionValue {
     parameters: Vec<String>,
     body: AstNode,
     captured: HashMap<String, Value>,
+    /// The source the function was defined in. Function bodies are evaluated
+    /// against their own text so that a function value remains valid when
+    /// called from a different source — most importantly from a later line
+    /// of an interactive session.
+    source: std::sync::Arc<SourceFile>,
+}
+
+/// Two function values are equal when they were created from equal code,
+/// parameters, and captures; the defining source's identity is irrelevant.
+impl PartialEq for FunctionValue {
+    fn eq(&self, other: &Self) -> bool {
+        self.parameters == other.parameters
+            && self.body == other.body
+            && self.captured == other.captured
+    }
 }
 
 impl Value {
@@ -105,15 +120,23 @@ impl Value {
 /// Lookups walk the stack from the innermost scope outward, so a block can
 /// shadow an outer binding while leaving the outer binding intact.
 ///
-/// This struct is not exposed publicly; it is an internal implementation detail
-/// of the [`Evaluator`].
-#[derive(Default)]
-struct Environment {
+/// The first scope is the *global* scope: it persists for the lifetime of the
+/// environment and is what function bodies resolve dynamically. Interactive
+/// front ends such as a REPL keep one environment alive across evaluations so
+/// bindings survive between inputs.
+pub struct Environment {
     /// The stack of scopes, with the innermost (most recent) scope at the end.
     scopes: Vec<HashMap<String, Value>>,
 }
 
 impl Environment {
+    /// Creates an empty environment containing only the global scope.
+    pub fn new() -> Self {
+        Self {
+            scopes: vec![HashMap::new()],
+        }
+    }
+
     /// Pushes a new, empty scope onto the stack.
     fn push_scope(&mut self) {
         self.scopes.push(HashMap::new());
@@ -199,6 +222,12 @@ impl Environment {
     }
 }
 
+impl Default for Environment {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Walks an [`AstNode`] and computes a [`Value`].
 ///
 /// The evaluator implements the semantic rules of the UCL language,
@@ -254,12 +283,31 @@ impl Evaluator {
         source: &SourceFile,
         sink: &mut DiagnosticSink,
     ) -> Option<Value> {
-        let mut environment = Environment::default();
-        environment.push_scope();
+        let mut environment = Environment::new();
+        self.evaluate_in(&mut environment, root, source, sink)
+    }
+
+    /// Evaluates the given AST inside an existing [`Environment`].
+    ///
+    /// This is the stateful counterpart to [`Evaluator::evaluate`]: bindings
+    /// created in the environment's global scope survive across calls, which
+    /// lets an interactive front end build on earlier inputs. The global
+    /// scope must be present; block scopes pushed during evaluation are
+    /// popped again before returning.
+    ///
+    /// Failure semantics match [`Evaluator::evaluate`], including the
+    /// baseline diagnostic accounting.
+    pub fn evaluate_in(
+        &self,
+        environment: &mut Environment,
+        root: &AstNode,
+        source: &SourceFile,
+        sink: &mut DiagnosticSink,
+    ) -> Option<Value> {
         self.call_depth.set(0);
         self.pending_return.borrow_mut().take();
         let baseline = sink.len();
-        let value = self.eval(root, source, &mut environment, sink, 0);
+        let value = self.eval(root, source, environment, sink, 0);
         // A `return` that reaches the program boundary never ran inside a
         // function call, which is an error in itself.
         if self.pending_return.borrow_mut().take().is_some() {
@@ -490,6 +538,7 @@ impl Evaluator {
                     parameters: names,
                     body: (**body).clone(),
                     captured,
+                    source: std::sync::Arc::new(source.clone()),
                 });
 
                 match name {
@@ -548,7 +597,16 @@ impl Evaluator {
                 for (parameter, value) in function.parameters.iter().zip(values) {
                     environment.define(parameter, value);
                 }
-                let value = self.eval(&function.body, source, environment, sink, depth + 1);
+                // The body is evaluated against the source the function was
+                // defined in, not the caller's; spans inside the body point
+                // there.
+                let value = self.eval(
+                    &function.body,
+                    &function.source,
+                    environment,
+                    sink,
+                    depth + 1,
+                );
                 environment.end_call(caller_scopes);
                 // Consume whatever `return` statement the body executed; an
                 // implicit return falls back to the body's last value.
@@ -1650,5 +1708,97 @@ mod tests {
                 .message
                 .contains("function call depth is too deep")
         }));
+    }
+
+    #[test]
+    fn evaluate_in_persists_global_bindings_across_calls() {
+        let evaluator = Evaluator::new();
+        let mut environment = Environment::new();
+
+        for (input, expected) in [("let x = 40;", None), ("x + 2;", Some(Value::Integer(42)))] {
+            let line_source = SourceFile::new("repl.ucl", input);
+            let mut line_sink = DiagnosticSink::new();
+            let tokens = Lexer::new(&line_source).tokenize(&mut line_sink);
+            let ast = Parser::new(tokens)
+                .parse(&mut line_sink)
+                .expect("parser should return a program");
+            assert!(!line_sink.has_errors(), "for `{input}`");
+
+            let value = evaluator.evaluate_in(&mut environment, &ast, &line_source, &mut line_sink);
+            assert!(!line_sink.has_errors(), "for `{input}`");
+            if let Some(value) = value {
+                assert_eq!(value, expected.unwrap_or(Value::Unit), "for `{input}`");
+            }
+        }
+    }
+
+    #[test]
+    fn evaluate_in_keeps_functions_and_their_captures_alive() {
+        let mut sink = DiagnosticSink::new();
+        let evaluator = Evaluator::new();
+        let mut environment = Environment::new();
+
+        let run_line = |evaluator: &Evaluator,
+                        environment: &mut Environment,
+                        input: &str,
+                        sink: &mut DiagnosticSink| {
+            let line_source = SourceFile::new("repl.ucl", input);
+            let tokens = Lexer::new(&line_source).tokenize(sink);
+            let ast = Parser::new(tokens)
+                .parse(sink)
+                .expect("parser should return a program");
+            evaluator.evaluate_in(environment, &ast, &line_source, sink)
+        };
+
+        let value = run_line(
+            &evaluator,
+            &mut environment,
+            "fn make(base) { return fn(n) { base + n; }; }; make(5);",
+            &mut sink,
+        )
+        .expect("definition succeeds");
+        // Store the returned closure by re-declaring it in a follow-up line.
+        let stored = matches!(value, Value::Function(_));
+        assert!(stored);
+
+        // A fresh line can still call the closure through a global binding.
+        assert!(
+            run_line(
+                &evaluator,
+                &mut environment,
+                "let add5 = make(5);",
+                &mut sink
+            )
+            .is_some()
+        );
+        let result = run_line(&evaluator, &mut environment, "add5(37);", &mut sink);
+        assert_eq!(result, Some(Value::Integer(42)));
+    }
+
+    #[test]
+    fn an_error_on_one_line_does_not_poison_the_next() {
+        let mut sink = DiagnosticSink::new();
+        let evaluator = Evaluator::new();
+        let mut environment = Environment::new();
+
+        let run_line = |evaluator: &Evaluator,
+                        environment: &mut Environment,
+                        input: &str,
+                        sink: &mut DiagnosticSink| {
+            let line_source = SourceFile::new("repl.ucl", input);
+            let tokens = Lexer::new(&line_source).tokenize(sink);
+            let ast = Parser::new(tokens)
+                .parse(sink)
+                .expect("parser should return a program");
+            evaluator.evaluate_in(environment, &ast, &line_source, sink)
+        };
+
+        assert!(run_line(&evaluator, &mut environment, "let x = 1;", &mut sink).is_some());
+        assert!(run_line(&evaluator, &mut environment, "x / 0;", &mut sink).is_none());
+        assert!(sink.has_errors());
+        assert_eq!(
+            run_line(&evaluator, &mut environment, "x + 1;", &mut sink),
+            Some(Value::Integer(2))
+        );
     }
 }

@@ -224,7 +224,7 @@ fn syntax_errors_stop_the_pipeline_before_evaluation() {
 fn help_flag_prints_usage_and_exits_zero() {
     let (stdout, stderr, code) = run_args(&["--help"]);
     assert_eq!(code, 0);
-    assert!(stdout.contains("usage: ucl <file>"));
+    assert!(stdout.contains("usage: ucl [<file>]"));
     assert!(stderr.is_empty());
 }
 
@@ -232,7 +232,7 @@ fn help_flag_prints_usage_and_exits_zero() {
 fn short_help_flag_is_equivalent() {
     let (stdout, _stderr, code) = run_args(&["-h"]);
     assert_eq!(code, 0);
-    assert!(stdout.contains("usage: ucl <file>"));
+    assert!(stdout.contains("usage: ucl [<file>]"));
 }
 
 #[test]
@@ -248,14 +248,7 @@ fn unknown_option_is_a_usage_error() {
     let (_stdout, stderr, code) = run_args(&["--bogus"]);
     assert_eq!(code, 2);
     assert!(stderr.contains("unknown option `--bogus`"));
-    assert!(stderr.contains("usage: ucl <file>"));
-}
-
-#[test]
-fn no_input_file_is_a_usage_error() {
-    let (_stdout, stderr, code) = run_args(&[]);
-    assert_eq!(code, 2);
-    assert!(stderr.contains("no input file"));
+    assert!(stderr.contains("usage: ucl [<file>]"));
 }
 
 #[test]
@@ -270,4 +263,97 @@ fn missing_file_is_reported() {
     let (_stdout, stderr, code) = run_args(&["definitely-missing.ucl"]);
     assert_eq!(code, 2);
     assert!(stderr.contains("cannot read"));
+}
+
+/// Feeds `input` to an interactive session and returns its stdout, stderr,
+/// and exit code.
+fn run_repl(input: &str) -> (String, String, i32) {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_ucl"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("run the ucl binary");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin is piped")
+        .write_all(input.as_bytes())
+        .expect("write REPL input");
+
+    let output = child.wait_with_output().expect("repl exits");
+    (
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+        output.status.code().expect("the process exited normally"),
+    )
+}
+
+#[test]
+fn repl_evaluates_and_echoes_expressions() {
+    let (stdout, _stderr, code) = run_repl("1 + 2;\n\"hi\";\ntrue;\n");
+    assert_eq!(code, 0);
+    assert!(stdout.contains("3"), "stdout: {stdout}");
+    assert!(stdout.contains("hi"), "stdout: {stdout}");
+    assert!(stdout.contains("true"), "stdout: {stdout}");
+}
+
+#[test]
+fn repl_bindings_persist_across_lines() {
+    let (stdout, _stderr, code) = run_repl("let x = 40;\nx + 2;\n");
+    assert_eq!(code, 0);
+    assert!(stdout.contains("42"), "stdout: {stdout}");
+}
+
+#[test]
+fn repl_definitions_span_multiple_lines() {
+    let input = "fn make(base) {\n  return fn(n) {\n    base + n;\n  };\n};\nlet add5 = make(5);\nadd5(37);\n";
+    let (stdout, _stderr, code) = run_repl(input);
+    assert_eq!(code, 0);
+    // The continuation prompt appears for each incomplete line, and the
+    // closure created on one line is callable from a later one.
+    assert!(stdout.contains("... "), "stdout: {stdout}");
+    assert!(stdout.contains("42"), "stdout: {stdout}");
+}
+
+#[test]
+fn repl_errors_do_not_end_the_session() {
+    let (stdout, stderr, code) = run_repl("1 / 0;\n2 * 3;\n");
+    assert_eq!(code, 0);
+    assert!(stderr.contains("division by zero"), "stderr: {stderr}");
+    assert!(stdout.contains("6"), "stdout: {stdout}");
+}
+
+#[test]
+fn repl_reset_forgets_bindings() {
+    let (stdout, stderr, code) = run_repl("let x = 1;\n:reset\nx;\n");
+    assert_eq!(code, 0);
+    assert!(stdout.contains("session reset"), "stdout: {stdout}");
+    assert!(stderr.contains("undefined variable"), "stderr: {stderr}");
+}
+
+#[test]
+fn repl_quit_command_ends_the_session() {
+    let (stdout, _stderr, code) = run_repl(":quit\n1 + 1;\n");
+    assert_eq!(code, 0);
+    assert!(
+        !stdout.contains('2'),
+        "nothing evaluates after :quit: {stdout}"
+    );
+}
+
+#[test]
+fn repl_incomplete_input_completes_across_lines() {
+    // `let x = ` alone is incomplete; the next line completes the entry, so
+    // no error is reported and later lines see the binding.
+    let (stdout, stderr, code) = run_repl("let x = \n4;\nx + 1;\n");
+    assert_eq!(code, 0);
+    assert!(stdout.contains("5"), "stdout: {stdout}");
+    assert!(
+        !stderr.contains("error"),
+        "a completed entry must not report errors: {stderr}"
+    );
 }

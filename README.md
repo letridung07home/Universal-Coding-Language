@@ -45,7 +45,25 @@ $ cargo run -- example.ucl
 area
 ```
 
-Use `cargo run -- --help` to display command-line help.
+Use `cargo run -- --help` to display command-line help, or start an
+interactive session by running `ucl` without arguments:
+
+```console
+$ cargo run
+UCL 0.6.0 interactive mode — type :help for help.
+>>> let x = 40;
+>>> x + 2;
+42
+>>> fn make(base) { return fn(n) { base + n; }; };
+>>> let add5 = make(5);
+>>> add5(37);
+42
+>>> :quit
+```
+
+Bindings persist across lines, definitions may span multiple lines (the
+`... ` continuation prompt appears while an entry is incomplete), and errors
+do not end the session.
 
 ## Requirements
 

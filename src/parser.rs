@@ -209,6 +209,11 @@ pub struct Parser {
     /// The current expression-nesting depth, used to guard against deeply
     /// nested input that would otherwise overflow the call stack.
     depth: usize,
+    /// Whether the last parse stopped because the input ended in the middle
+    /// of a construct (an unbalanced brace, a dangling operator, and so on).
+    /// Interactive front ends use this to keep reading continuation lines
+    /// instead of reporting an error.
+    incomplete: bool,
 }
 
 impl Parser {
@@ -218,7 +223,17 @@ impl Parser {
             tokens,
             cursor: 0,
             depth: 0,
+            incomplete: false,
         }
+    }
+
+    /// Returns true if the last parse ended because the input ran out in the
+    /// middle of a construct rather than because of genuinely malformed
+    /// syntax. An error anchored at end-of-input almost always means more
+    /// text was expected; an error at any real token means the input is
+    /// wrong as written.
+    pub fn is_incomplete(&self) -> bool {
+        self.incomplete
     }
 
     /// Parses the token stream into an abstract syntax tree.
@@ -732,7 +747,13 @@ impl Parser {
     }
 
     /// Emits an error diagnostic at the current token position.
-    fn error_current(&self, message: &str, sink: &mut DiagnosticSink) {
+    ///
+    /// When the offending position is end-of-input the parse is also marked
+    /// incomplete; see [`Parser::is_incomplete`].
+    fn error_current(&mut self, message: &str, sink: &mut DiagnosticSink) {
+        if self.at_eof() {
+            self.incomplete = true;
+        }
         sink.emit(Diagnostic::error(message).at(self.current_span()));
     }
 
@@ -1289,5 +1310,59 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn input_that_ends_mid_construct_is_incomplete() {
+        for source_text in [
+            "let x = ",
+            "1 + ",
+            "fn f() {",
+            "if true { 1; } else ",
+            "fn(",
+        ] {
+            let source = SourceFile::new("repl.ucl", source_text);
+            let mut sink = DiagnosticSink::new();
+            let tokens = Lexer::new(&source).tokenize(&mut sink);
+            assert!(!sink.has_errors(), "lexing `{source_text}`");
+            let parser_tokens = tokens.clone();
+            let mut parser = Parser::new(tokens);
+            parser.parse(&mut sink);
+            assert!(sink.has_errors(), "`{source_text}` should report an error");
+            assert!(
+                parser.is_incomplete(),
+                "`{source_text}` should be incomplete"
+            );
+            let _ = parser_tokens;
+        }
+    }
+
+    #[test]
+    fn genuinely_wrong_input_is_not_marked_incomplete() {
+        for source_text in ["1 + ) ;", "let 5 = 3;", "fn f(,) {}"] {
+            let source = SourceFile::new("repl.ucl", source_text);
+            let mut sink = DiagnosticSink::new();
+            let tokens = Lexer::new(&source).tokenize(&mut sink);
+            let mut parser = Parser::new(tokens);
+            parser.parse(&mut sink);
+            assert!(sink.has_errors(), "`{source_text}` should report an error");
+            assert!(
+                !parser.is_incomplete(),
+                "`{source_text}` should be complete-but-wrong"
+            );
+        }
+    }
+
+    #[test]
+    fn complete_input_never_reports_incomplete() {
+        for source_text in ["1 + 2;", "let x = 5;", "fn f() { return 1; };"] {
+            let source = SourceFile::new("repl.ucl", source_text);
+            let mut sink = DiagnosticSink::new();
+            let tokens = Lexer::new(&source).tokenize(&mut sink);
+            let mut parser = Parser::new(tokens);
+            parser.parse(&mut sink);
+            assert!(!sink.has_errors(), "for `{source_text}`");
+            assert!(!parser.is_incomplete(), "for `{source_text}`");
+        }
     }
 }

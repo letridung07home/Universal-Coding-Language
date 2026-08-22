@@ -10,6 +10,7 @@ pub type BytePos = usize;
 ///
 /// A [`SourceFile`] owns its name (usually a path) and its contents. All
 /// positions and [`Span`]s are expressed as byte offsets into `contents`.
+#[derive(Clone, Debug)]
 pub struct SourceFile {
     name: String,
     contents: String,
