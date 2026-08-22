@@ -39,20 +39,29 @@ fn main() -> ExitCode {
     let mut sink = DiagnosticSink::new();
 
     // Run the pipeline: source text → tokens → AST → value.
+    //
+    // Each stage runs only if every earlier stage succeeded, so a program
+    // with lexical errors is never parsed and one with syntax errors is
+    // never evaluated. This keeps diagnostics focused on the root cause
+    // instead of cascading through downstream stages fed garbage input.
+    let mut value = None;
     let tokens = Lexer::new(&source).tokenize(&mut sink);
-    let ast = Parser::new(tokens).parse(&mut sink);
-    let value = ast.map_or(Value::Unit, |ast| {
-        Evaluator::new().evaluate(&ast, &source, &mut sink)
-    });
+    if !sink.has_errors()
+        && let Some(ast) = Parser::new(tokens).parse(&mut sink)
+        && !sink.has_errors()
+    {
+        value = Evaluator::new().evaluate(&ast, &source, &mut sink);
+    }
 
     render_diagnostics(&sink, &source);
 
-    if sink.has_errors() {
-        return ExitCode::FAILURE;
+    match value {
+        Some(value) => {
+            print_value(&value);
+            ExitCode::SUCCESS
+        }
+        None => ExitCode::FAILURE,
     }
-
-    print_value(&value);
-    ExitCode::SUCCESS
 }
 
 /// Interprets command-line arguments.

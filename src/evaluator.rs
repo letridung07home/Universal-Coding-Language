@@ -16,27 +16,27 @@
 //! The evaluator follows a "collect all errors" strategy:
 //! - Errors are emitted to the `DiagnosticSink` but do not stop execution
 //! - Evaluation continues to report multiple errors in a single pass
-//! - The final value is the result of the last successfully evaluated statement
-//! - Callers should check `sink.has_errors()` to determine if execution succeeded
+//! - [`Evaluator::evaluate`] returns `None` when any runtime error occurred,
+//!   and `Some(value)` with the program's value otherwise
 //!
 //! This design allows users to see all errors in their program at once,
 //! similar to how compilers like rustc operate.
 
 use std::collections::HashMap;
 
-use crate::diagnostic::{Diagnostic, DiagnosticSink};
-use crate::parser::{AstKind, AstNode};
+use crate::diagnostic::{Diagnostic, DiagnosticSink, Severity};
+use crate::parser::{AstKind, AstNode, BinaryOperator};
 use crate::source::{SourceFile, Span};
 
 /// The maximum evaluation-nesting depth allowed before an error is reported.
 ///
 /// This guards against deeply nested ASTs constructed through the public API
 /// that would otherwise overflow the call stack during recursive evaluation.
-/// It is deliberately larger than the parser's own nesting limit: AST wrappers
-/// such as `let`, assignment, and binary operators add evaluator depth without
-/// adding parser nesting, so a program the parser accepts must never be
-/// rejected here.
-const MAX_EVAL_DEPTH: usize = 1024;
+/// Binary operator chains are flattened into loops (see `eval`), so recursion
+/// depth tracks expression nesting: any program the parser accepts at its
+/// limit of 256 nested expressions stays well below this bound, and a
+/// program the parser accepts must never be rejected here.
+const MAX_EVAL_DEPTH: usize = 512;
 
 /// A runtime value produced by evaluating a program.
 #[derive(Clone, Debug, PartialEq)]
@@ -140,15 +140,17 @@ impl Evaluator {
 
     /// Evaluates the given AST to produce a value.
     ///
-    /// `source` provides the text that the AST's spans point into. The result
-    /// is the value of the program's last statement, or [`Value::Unit`] if the
-    /// program is empty.
+    /// `source` provides the text that the AST's spans point into. On
+    /// success, the result is the value of the program's last statement, or
+    /// [`Value::Unit`] if the program is empty.
     ///
     /// # Error Handling
     ///
-    /// Even if errors occur during evaluation, this method returns a value
-    /// (typically the last successfully computed value). Callers should check
-    /// `sink.has_errors()` to determine if evaluation succeeded without errors.
+    /// Returns `None` if any runtime error was emitted to `sink` during this
+    /// call (diagnostics already present in the sink before the call are not
+    /// considered), and `Some(value)` otherwise. This makes failure explicit:
+    /// callers never need to guess whether a [`Value::Unit`] result means a
+    /// real unit value or an error.
     ///
     /// # Example
     ///
@@ -156,9 +158,9 @@ impl Evaluator {
     /// let source = SourceFile::new("example.ucl", "2 + 3 * 4");
     /// let mut sink = DiagnosticSink::new();
     /// let ast = /* parse the source */;
-    /// let value = Evaluator::new().evaluate(&ast, &source, &mut sink);
-    /// if sink.has_errors() {
-    ///     // Handle errors
+    /// match Evaluator::new().evaluate(&ast, &source, &mut sink) {
+    ///     Some(value) => println!("{value:?}"),
+    ///     None => { /* handle runtime errors */ }
     /// }
     /// ```
     pub fn evaluate(
@@ -166,10 +168,16 @@ impl Evaluator {
         root: &AstNode,
         source: &SourceFile,
         sink: &mut DiagnosticSink,
-    ) -> Value {
+    ) -> Option<Value> {
         let mut environment = Environment::default();
         environment.push_scope();
-        self.eval(root, source, &mut environment, sink, 0)
+        let baseline = sink.len();
+        let value = self.eval(root, source, &mut environment, sink, 0);
+        let failed = sink
+            .iter()
+            .skip(baseline)
+            .any(|d| d.severity == Severity::Error);
+        if failed { None } else { Some(value) }
     }
 
     /// Internal evaluation function that walks the AST.
@@ -207,13 +215,28 @@ impl Evaluator {
                 last
             }
             AstKind::Let { name, value, .. } => {
-                let name = source.slice(*name).expect("declaration name span is valid");
+                // Spans come from the parser and are valid there, but ASTs
+                // can also be constructed through the public API with
+                // arbitrary spans; report those instead of panicking.
+                let Some(name) = source.slice(*name) else {
+                    sink.emit(
+                        Diagnostic::error("declaration has an invalid name span").at(node.span),
+                    );
+                    return Value::Unit;
+                };
+                let name = name.to_owned();
                 let value = self.eval(value, source, environment, sink, depth + 1);
-                environment.define(name, value);
+                environment.define(&name, value);
                 Value::Unit
             }
             AstKind::Identifier => {
-                let name = source.slice(node.span).expect("identifier span is valid");
+                let name = match source.slice(node.span) {
+                    Some(name) => name,
+                    None => {
+                        sink.emit(Diagnostic::error("invalid identifier span").at(node.span));
+                        return Value::Unit;
+                    }
+                };
                 match environment.lookup(name) {
                     Some(value) => value.clone(),
                     None => {
@@ -225,9 +248,14 @@ impl Evaluator {
                 }
             }
             AstKind::Integer => {
-                let text = source
-                    .slice(node.span)
-                    .expect("integer literal span is valid");
+                let text = match source.slice(node.span) {
+                    Some(text) => text,
+                    None => {
+                        sink.emit(Diagnostic::error("invalid integer literal span").at(node.span));
+                        return Value::Unit;
+                    }
+                };
+                let text = text.to_owned();
                 match text.parse::<i64>() {
                     Ok(value) => Value::Integer(value),
                     Err(_) => {
@@ -239,6 +267,7 @@ impl Evaluator {
                     }
                 }
             }
+            AstKind::BooleanLiteral(value) => Value::Boolean(*value),
             AstKind::Group { expression } => {
                 self.eval(expression, source, environment, sink, depth + 1)
             }
@@ -251,22 +280,64 @@ impl Evaluator {
                 left,
                 right,
             } => {
-                let left = self.eval(left, source, environment, sink, depth + 1);
-                let right = self.eval(right, source, environment, sink, depth + 1);
-                self.eval_binary(*operator, left, right, node.span, sink)
+                // A flat, left-associative chain such as `1 + 1 + ...` adds
+                // one evaluator level per link without adding any parser
+                // nesting, so recursing per link would reject arbitrarily
+                // long chains the parser accepts. Flattening the left spine
+                // into an explicit loop keeps recursion depth bounded by
+                // expression nesting instead of chain length. Operands are
+                // still evaluated strictly left to right.
+                let mut operators = vec![*operator];
+                let mut operands = vec![right];
+                let mut spans = vec![node.span];
+                let mut current: &AstNode = left;
+                while let AstKind::Binary {
+                    operator: nested_operator,
+                    left: nested_left,
+                    right: nested_right,
+                } = &current.kind
+                {
+                    operators.push(*nested_operator);
+                    operands.push(nested_right);
+                    spans.push(current.span);
+                    current = nested_left;
+                }
+
+                let mut accumulator = self.eval(current, source, environment, sink, depth + 1);
+                for index in (0..operators.len()).rev() {
+                    let operator = operators[index];
+                    // Short-circuiting: `&` skips its right-hand side once the
+                    // left is false and `|` skips it once the left is true.
+                    if operator == BinaryOperator::And && accumulator == Value::Boolean(false) {
+                        continue;
+                    }
+                    if operator == BinaryOperator::Or && accumulator == Value::Boolean(true) {
+                        continue;
+                    }
+                    let operand = self.eval(operands[index], source, environment, sink, depth + 1);
+                    accumulator =
+                        self.eval_binary(operator, accumulator, operand, spans[index], sink);
+                }
+                accumulator
             }
             AstKind::Assignment { target, value } => {
                 let name = match &target.kind {
-                    AstKind::Identifier => source
-                        .slice(target.span)
-                        .expect("assignment target span is valid"),
+                    AstKind::Identifier => match source.slice(target.span) {
+                        Some(name) => name.to_owned(),
+                        None => {
+                            sink.emit(
+                                Diagnostic::error("invalid assignment target span").at(target.span),
+                            );
+                            return Value::Unit;
+                        }
+                    },
                     _ => {
                         sink.emit(Diagnostic::error("invalid assignment target").at(target.span));
                         return Value::Unit;
                     }
                 };
                 let value = self.eval(value, source, environment, sink, depth + 1);
-                if !environment.assign(name, value.clone()) {
+                if !environment.assign(&name, value.clone()) {
                     sink.emit(
                         Diagnostic::error(format!("cannot assign to undefined variable `{name}`"))
                             .at(target.span),
@@ -297,48 +368,49 @@ impl Evaluator {
 
     fn eval_binary(
         &self,
-        operator: char,
+        operator: BinaryOperator,
         left: Value,
         right: Value,
         span: Span,
         sink: &mut DiagnosticSink,
     ) -> Value {
+        use BinaryOperator::*;
         match operator {
-            '+' | '-' | '*' | '/' | '%' | '^' => {
+            Add | Sub | Mul | Div | Rem | Pow => {
                 let (a, b) = match (left, right) {
                     (Value::Integer(a), Value::Integer(b)) => (a, b),
                     (l, r) => return binary_type_error(operator, &l, &r, span, sink),
                 };
                 match operator {
-                    '+' => match a.checked_add(b) {
+                    Add => match a.checked_add(b) {
                         Some(sum) => Value::Integer(sum),
                         None => overflow(span, sink),
                     },
-                    '-' => match a.checked_sub(b) {
+                    Sub => match a.checked_sub(b) {
                         Some(difference) => Value::Integer(difference),
                         None => overflow(span, sink),
                     },
-                    '*' => match a.checked_mul(b) {
+                    Mul => match a.checked_mul(b) {
                         Some(product) => Value::Integer(product),
                         None => overflow(span, sink),
                     },
-                    '/' if b == 0 => division_by_zero(span, sink),
-                    '/' => match a.checked_div(b) {
+                    Div if b == 0 => division_by_zero(span, sink),
+                    Div => match a.checked_div(b) {
                         Some(quotient) => Value::Integer(quotient),
                         None => overflow(span, sink),
                     },
-                    '%' if b == 0 => division_by_zero(span, sink),
-                    '%' => match a.checked_rem(b) {
+                    Rem if b == 0 => division_by_zero(span, sink),
+                    Rem => match a.checked_rem(b) {
                         Some(remainder) => Value::Integer(remainder),
                         None => overflow(span, sink),
                     },
-                    '^' if b < 0 => {
+                    Pow if b < 0 => {
                         sink.emit(
                             Diagnostic::error("negative exponents are not supported").at(span),
                         );
                         Value::Unit
                     }
-                    '^' => {
+                    Pow => {
                         let exponent = match u32::try_from(b) {
                             Ok(exponent) => exponent,
                             // The exponent exceeds `u32::MAX`. Only the bases
@@ -362,23 +434,40 @@ impl Evaluator {
                     _ => unreachable!("`operator` is restricted to arithmetic operators"),
                 }
             }
-            '<' | '>' => {
+            Less | Greater | LessEqual | GreaterEqual => {
                 let (a, b) = match (left, right) {
                     (Value::Integer(a), Value::Integer(b)) => (a, b),
                     (l, r) => return binary_type_error(operator, &l, &r, span, sink),
                 };
-                Value::Boolean(if operator == '<' { a < b } else { a > b })
+                Value::Boolean(match operator {
+                    Less => a < b,
+                    Greater => a > b,
+                    LessEqual => a <= b,
+                    GreaterEqual => a >= b,
+                    _ => unreachable!("`operator` is restricted to relational operators"),
+                })
             }
-            '&' | '|' => {
+            Equal | NotEqual => {
+                // Equality is defined for two integers or two booleans;
+                // comparing values of different types is an error.
+                match (left, right) {
+                    (Value::Integer(a), Value::Integer(b)) => {
+                        Value::Boolean(if operator == Equal { a == b } else { a != b })
+                    }
+                    (Value::Boolean(a), Value::Boolean(b)) => {
+                        Value::Boolean(if operator == Equal { a == b } else { a != b })
+                    }
+                    (l, r) => binary_type_error(operator, &l, &r, span, sink),
+                }
+            }
+            And | Or => {
+                // Reached only when short-circuiting did not skip the
+                // right-hand side (see the `Binary` arm in `eval`).
                 let (a, b) = match (left, right) {
                     (Value::Boolean(a), Value::Boolean(b)) => (a, b),
                     (l, r) => return binary_type_error(operator, &l, &r, span, sink),
                 };
-                Value::Boolean(if operator == '&' { a && b } else { a || b })
-            }
-            _ => {
-                sink.emit(Diagnostic::error(format!("unknown operator `{operator}`")).at(span));
-                Value::Unit
+                Value::Boolean(if operator == And { a && b } else { a || b })
             }
         }
     }
@@ -413,7 +502,7 @@ fn unary_type_error(
 ///
 /// This is used when a binary operator is applied to operands of the wrong types.
 fn binary_type_error(
-    operator: char,
+    operator: BinaryOperator,
     left: &Value,
     right: &Value,
     span: Span,
@@ -448,7 +537,7 @@ mod tests {
     use crate::lexer::Lexer;
     use crate::parser::Parser;
 
-    fn eval(source_text: &str) -> (Value, DiagnosticSink) {
+    fn eval(source_text: &str) -> (Option<Value>, DiagnosticSink) {
         let source = SourceFile::new("test.ucl", source_text);
         let mut sink = DiagnosticSink::new();
         let tokens = Lexer::new(&source).tokenize(&mut sink);
@@ -463,57 +552,57 @@ mod tests {
     fn evaluates_integer_literals() {
         let (value, sink) = eval("42;");
         assert!(!sink.has_errors());
-        assert_eq!(value, Value::Integer(42));
+        assert_eq!(value, Some(Value::Integer(42)));
     }
 
     #[test]
     fn respects_operator_precedence() {
         let (value, sink) = eval("2 + 3 * 4;");
         assert!(!sink.has_errors());
-        assert_eq!(value, Value::Integer(14));
+        assert_eq!(value, Some(Value::Integer(14)));
     }
 
     #[test]
     fn exponentiation_binds_tighter_than_multiplication() {
         let (value, sink) = eval("2 ^ 3 * 2;");
         assert!(!sink.has_errors());
-        assert_eq!(value, Value::Integer(16));
+        assert_eq!(value, Some(Value::Integer(16)));
     }
 
     #[test]
     fn evaluates_bindings_and_references() {
         let (value, sink) = eval("let x = 5; x + 1;");
         assert!(!sink.has_errors());
-        assert_eq!(value, Value::Integer(6));
+        assert_eq!(value, Some(Value::Integer(6)));
     }
 
     #[test]
     fn assignment_updates_existing_bindings() {
         let (value, sink) = eval("let x = 5; x = 10; x;");
         assert!(!sink.has_errors());
-        assert_eq!(value, Value::Integer(10));
+        assert_eq!(value, Some(Value::Integer(10)));
     }
 
     #[test]
     fn blocks_introduce_new_scopes() {
         let (value, sink) = eval("let x = 5; { let x = 10; }; x;");
         assert!(!sink.has_errors());
-        assert_eq!(value, Value::Integer(5));
+        assert_eq!(value, Some(Value::Integer(5)));
     }
 
     #[test]
     fn comparisons_and_logic_produce_booleans() {
         let (value, sink) = eval("1 < 2;");
         assert!(!sink.has_errors());
-        assert_eq!(value, Value::Boolean(true));
+        assert_eq!(value, Some(Value::Boolean(true)));
 
         let (value, sink) = eval("!(1 < 2);");
         assert!(!sink.has_errors());
-        assert_eq!(value, Value::Boolean(false));
+        assert_eq!(value, Some(Value::Boolean(false)));
 
         let (value, sink) = eval("1 < 2 & 2 < 3;");
         assert!(!sink.has_errors());
-        assert_eq!(value, Value::Boolean(true));
+        assert_eq!(value, Some(Value::Boolean(true)));
     }
 
     #[test]
@@ -592,19 +681,19 @@ mod tests {
         // the exponent is too large to represent as a `u32`.
         let (value, sink) = eval("0 ^ 4294967296;");
         assert!(!sink.has_errors());
-        assert_eq!(value, Value::Integer(0));
+        assert_eq!(value, Some(Value::Integer(0)));
 
         let (value, sink) = eval("1 ^ 4294967296;");
         assert!(!sink.has_errors());
-        assert_eq!(value, Value::Integer(1));
+        assert_eq!(value, Some(Value::Integer(1)));
 
         let (value, sink) = eval("-1 ^ 4294967296;");
         assert!(!sink.has_errors());
-        assert_eq!(value, Value::Integer(1));
+        assert_eq!(value, Some(Value::Integer(1)));
 
         let (value, sink) = eval("-1 ^ 4294967297;");
         assert!(!sink.has_errors());
-        assert_eq!(value, Value::Integer(-1));
+        assert_eq!(value, Some(Value::Integer(-1)));
     }
 
     #[test]
@@ -658,6 +747,97 @@ mod tests {
     }
 
     #[test]
+    fn evaluates_equality_on_integers_and_booleans() {
+        for (source, expected) in [
+            ("1 == 1;", true),
+            ("1 == 2;", false),
+            ("1 != 2;", true),
+            ("true == true;", true),
+            ("false != true;", true),
+        ] {
+            let (value, sink) = eval(source);
+            assert!(!sink.has_errors(), "unexpected error for `{source}`");
+            assert_eq!(value, Some(Value::Boolean(expected)), "for `{source}`");
+        }
+    }
+
+    #[test]
+    fn rejects_equality_across_types() {
+        let (_value, sink) = eval("1 == true;");
+        assert!(sink.has_errors());
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("cannot apply `==`"))
+        );
+    }
+
+    #[test]
+    fn evaluates_relational_operators() {
+        for (source, expected) in [
+            ("1 <= 1;", true),
+            ("1 < 1;", false),
+            ("2 >= 1;", true),
+            ("2 > 3;", false),
+            ("1 < 2 == true;", true),
+        ] {
+            let (value, sink) = eval(source);
+            assert!(!sink.has_errors(), "unexpected error for `{source}`");
+            assert_eq!(value, Some(Value::Boolean(expected)), "for `{source}`");
+        }
+    }
+
+    #[test]
+    fn logical_operators_short_circuit() {
+        // The right-hand side would raise a division-by-zero error, but
+        // short-circuiting must skip it entirely.
+        let (value, sink) = eval("false & 1 / 0;");
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Boolean(false)));
+
+        let (value, sink) = eval("true | 1 / 0;");
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Boolean(true)));
+
+        // Short-circuiting also skips undefined-variable errors.
+        let (value, sink) = eval("false & missing;");
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Boolean(false)));
+    }
+
+    #[test]
+    fn short_circuiting_does_not_skip_needed_sides() {
+        // The left-hand side is evaluated even when the right could be
+        // skipped: `1 / 0` must still report its error.
+        let (_value, sink) = eval("1 / 0 & true;");
+        assert!(sink.has_errors());
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("division by zero"))
+        );
+
+        // When the left-hand side does not force a skip, the right-hand side
+        // is still evaluated.
+        let (value, sink) = eval("true & (1 / 0) == 0 | true;");
+        assert!(sink.has_errors(), "expected the right side to be evaluated");
+        let _ = value;
+    }
+
+    #[test]
+    fn evaluates_boolean_literals() {
+        let (value, sink) = eval("true;");
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Boolean(true)));
+
+        let (value, sink) = eval("false;");
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Boolean(false)));
+
+        let (value, sink) = eval("!false;");
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Boolean(true)));
+    }
+
+    #[test]
     fn reports_unary_type_errors() {
         for source in ["-(1 < 2);", "!5;"] {
             let (_value, sink) = eval(source);
@@ -707,21 +887,57 @@ mod tests {
     fn evaluates_logical_or_on_booleans() {
         let (value, sink) = eval("1 > 2 | 2 < 3;");
         assert!(!sink.has_errors());
-        assert_eq!(value, Value::Boolean(true));
+        assert_eq!(value, Some(Value::Boolean(true)));
     }
 
     #[test]
     fn assignment_inside_a_block_updates_the_outer_binding() {
         let (value, sink) = eval("let x = 5; { x = 10; }; x;");
         assert!(!sink.has_errors());
-        assert_eq!(value, Value::Integer(10));
+        assert_eq!(value, Some(Value::Integer(10)));
     }
 
     #[test]
     fn assignment_to_a_shadowed_binding_stays_in_its_scope() {
         let (value, sink) = eval("let x = 5; { let x = 10; x = 20; }; x;");
         assert!(!sink.has_errors());
-        assert_eq!(value, Value::Integer(5));
+        assert_eq!(value, Some(Value::Integer(5)));
+    }
+
+    #[test]
+    fn reports_invalid_spans_from_hand_built_asts_instead_of_panicking() {
+        // AST nodes are publicly constructible, so spans may point outside
+        // the source. The evaluator must report a diagnostic rather than
+        // panic when reading names or literals through such a span.
+        let source = SourceFile::new("test.ucl", "let x = 5;");
+        let program = AstNode {
+            span: Span::new(0, 10),
+            kind: AstKind::Program {
+                statements: vec![
+                    AstNode {
+                        span: Span::new(100, 200),
+                        kind: AstKind::Identifier,
+                    },
+                    AstNode {
+                        span: Span::new(300, 400),
+                        kind: AstKind::Integer,
+                    },
+                ],
+            },
+        };
+        let mut sink = DiagnosticSink::new();
+
+        let _ = Evaluator::new().evaluate(&program, &source, &mut sink);
+
+        assert!(sink.has_errors());
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("invalid identifier span"))
+        );
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("invalid integer literal span"))
+        );
     }
 
     #[test]
@@ -729,20 +945,18 @@ mod tests {
         let source_text = vec!["1"; 100].join(" + ") + ";";
         let (value, sink) = eval(&source_text);
         assert!(!sink.has_errors());
-        assert_eq!(value, Value::Integer(100));
+        assert_eq!(value, Some(Value::Integer(100)));
     }
 
     #[test]
-    #[ignore = "known limitation: evaluator depth guard rejects long flat chains"]
     fn evaluates_long_flat_binary_chains_within_the_parser_limit() {
         // A flat, left-associative chain adds evaluator depth without adding
-        // parser nesting, so the parser accepts it while the evaluator's
-        // `MAX_EVAL_DEPTH` guard (1024) currently rejects it. Remove the
-        // `#[ignore]` once the depth limits are made consistent.
+        // parser nesting. Left-spine flattening keeps such chains iterative,
+        // so anything within the parser's limit must evaluate without error.
         let terms = 2_000;
         let source_text = vec!["1"; terms].join(" + ") + ";";
         let (value, sink) = eval(&source_text);
         assert!(!sink.has_errors());
-        assert_eq!(value, Value::Integer(terms as i64));
+        assert_eq!(value, Some(Value::Integer(terms as i64)));
     }
 }

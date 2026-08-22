@@ -8,9 +8,9 @@ concrete implementation work should be tracked in issues as it is scheduled.
 
 - [x] Recognize `let` as an actual keyword instead of accepting any identifier
       in the declaration position
-- [ ] Stop evaluation when lexing or parsing reports errors
-- [ ] Make evaluator failures explicit rather than representing them as `unit`
-- [ ] Validate source spans and prevent invalid public spans from panicking
+- [x] Stop evaluation when lexing or parsing reports errors
+- [x] Make evaluator failures explicit rather than representing them as `unit`
+- [x] Validate source spans and prevent invalid public spans from panicking
 - [x] Add regression tests for overflow, malformed syntax, UTF-8 diagnostics,
       nested scopes, and CLI argument handling
 - [x] Add parser and evaluator nesting limits
@@ -19,7 +19,7 @@ concrete implementation work should be tracked in issues as it is scheduled.
 
 - [ ] Define keyword, assignment, operator, and runtime-error semantics
 - [ ] Decide whether UCL will be statically or dynamically typed
-- [ ] Add boolean literals and equality operators
+- [x] Add boolean literals and equality operators
 - [ ] Add strings and string operations
 - [ ] Add functions, parameters, return values, and closures
 - [ ] Add conditional and looping constructs

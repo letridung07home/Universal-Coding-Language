@@ -107,6 +107,16 @@ impl DiagnosticSink {
             .any(|d| d.severity == Severity::Error)
     }
 
+    /// Returns the number of recorded diagnostics.
+    pub fn len(&self) -> usize {
+        self.diagnostics.len()
+    }
+
+    /// Returns true if no diagnostics have been recorded.
+    pub fn is_empty(&self) -> bool {
+        self.diagnostics.is_empty()
+    }
+
     /// Returns an iterator over all recorded diagnostics, in emission order.
     pub fn iter(&self) -> impl Iterator<Item = &Diagnostic> {
         self.diagnostics.iter()

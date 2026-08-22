@@ -122,6 +122,28 @@ fn runtime_errors_exit_with_code_one() {
 }
 
 #[test]
+fn lexical_errors_stop_the_pipeline() {
+    // `π` is a lexical error; the parser must never run on the remaining
+    // garbage, so no downstream syntax diagnostics may appear.
+    let (stdout, stderr, success) = run("let π = );");
+    assert!(!success);
+    assert!(stdout.is_empty());
+    assert!(stderr.contains("unexpected character"));
+    assert!(!stderr.contains("expected an expression"));
+}
+
+#[test]
+fn syntax_errors_stop_the_pipeline_before_evaluation() {
+    // The first statement would fail at runtime (`1 / 0`), but parsing the
+    // second one fails first, so only the syntax error is reported.
+    let (stdout, stderr, success) = run("1 / 0; let = ;");
+    assert!(!success);
+    assert!(stdout.is_empty());
+    assert!(stderr.contains("expected an identifier after `let`"));
+    assert!(!stderr.contains("division by zero"));
+}
+
+#[test]
 fn help_flag_prints_usage_and_exits_zero() {
     let (stdout, stderr, code) = run_args(&["--help"]);
     assert_eq!(code, 0);

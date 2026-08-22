@@ -8,6 +8,10 @@ use crate::source::{SourceFile, Span};
 pub enum Keyword {
     /// The `let` declaration keyword.
     Let,
+    /// The `true` boolean literal.
+    True,
+    /// The `false` boolean literal.
+    False,
 }
 
 /// The kind of a lexical token.
@@ -25,6 +29,14 @@ pub enum TokenKind {
     Integer,
     /// A punctuation character: `(`, `)`, `{`, `}`, `+`, `-`, etc.
     Punctuation(char),
+    /// A two-character operator: `<=`.
+    LessEqual,
+    /// A two-character operator: `>=`.
+    GreaterEqual,
+    /// A two-character operator: `==`.
+    EqualEqual,
+    /// A two-character operator: `!=`.
+    NotEqual,
     /// A reserved word such as `let`.
     Keyword(Keyword),
     /// End of input marker.
@@ -96,10 +108,11 @@ impl<'src> Lexer<'src> {
                 {
                     pos += 1;
                 }
-                let kind = if &contents[start..pos] == "let" {
-                    TokenKind::Keyword(Keyword::Let)
-                } else {
-                    TokenKind::Ident
+                let kind = match &contents[start..pos] {
+                    "let" => TokenKind::Keyword(Keyword::Let),
+                    "true" => TokenKind::Keyword(Keyword::True),
+                    "false" => TokenKind::Keyword(Keyword::False),
+                    _ => TokenKind::Ident,
                 };
                 tokens.push(Token {
                     kind,
@@ -122,12 +135,34 @@ impl<'src> Lexer<'src> {
                 continue;
             }
 
-            // Any ASCII punctuation character.
+            // Any ASCII punctuation character. Two-character operators
+            // (`<=`, `>=`, `==`, `!=`) are matched with maximal munch, so
+            // `<=` is one token while `<` followed by `=` (as in `a < b = c`)
+            // remains two.
             if byte.is_ascii_punctuation() {
                 let start = pos;
                 pos += 1;
+                let kind = match (byte, bytes.get(pos)) {
+                    (b'<', Some(b'=')) => {
+                        pos += 1;
+                        TokenKind::LessEqual
+                    }
+                    (b'>', Some(b'=')) => {
+                        pos += 1;
+                        TokenKind::GreaterEqual
+                    }
+                    (b'=', Some(b'=')) => {
+                        pos += 1;
+                        TokenKind::EqualEqual
+                    }
+                    (b'!', Some(b'=')) => {
+                        pos += 1;
+                        TokenKind::NotEqual
+                    }
+                    _ => TokenKind::Punctuation(byte as char),
+                };
                 tokens.push(Token {
-                    kind: TokenKind::Punctuation(byte as char),
+                    kind,
                     span: Span::new(start, pos),
                 });
                 continue;
@@ -219,6 +254,25 @@ mod tests {
     }
 
     #[test]
+    fn recognizes_boolean_literals_as_keywords() {
+        let source = SourceFile::new("main.ucl", "true false truex _true True");
+        let tokens = Lexer::new(&source).tokenize(&mut DiagnosticSink::new());
+
+        let kinds: Vec<TokenKind> = tokens.iter().map(|token| token.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::Keyword(Keyword::True),
+                TokenKind::Keyword(Keyword::False),
+                TokenKind::Ident,
+                TokenKind::Ident,
+                TokenKind::Ident,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
     fn skips_whitespace_and_records_spans() {
         let source = SourceFile::new("main.ucl", "  x \n 12 ");
         let tokens = Lexer::new(&source).tokenize(&mut DiagnosticSink::new());
@@ -255,6 +309,35 @@ mod tests {
                 TokenKind::Punctuation('='),
                 TokenKind::Integer,
                 TokenKind::Punctuation(';'),
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn tokenizes_two_character_operators_with_maximal_munch() {
+        let source = SourceFile::new("main.ucl", "a <= b >= c == d != e < f = g ! h");
+        let tokens = Lexer::new(&source).tokenize(&mut DiagnosticSink::new());
+
+        let kinds: Vec<TokenKind> = tokens.iter().map(|token| token.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::Ident,
+                TokenKind::LessEqual,
+                TokenKind::Ident,
+                TokenKind::GreaterEqual,
+                TokenKind::Ident,
+                TokenKind::EqualEqual,
+                TokenKind::Ident,
+                TokenKind::NotEqual,
+                TokenKind::Ident,
+                TokenKind::Punctuation('<'),
+                TokenKind::Ident,
+                TokenKind::Punctuation('='),
+                TokenKind::Ident,
+                TokenKind::Punctuation('!'),
+                TokenKind::Ident,
                 TokenKind::Eof,
             ]
         );

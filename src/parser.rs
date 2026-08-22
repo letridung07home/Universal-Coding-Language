@@ -1,5 +1,7 @@
 //! Parser: builds an abstract syntax tree from tokens.
 
+use std::fmt;
+
 use crate::diagnostic::{Diagnostic, DiagnosticSink};
 use crate::lexer::{Keyword, Token, TokenKind};
 use crate::source::Span;
@@ -45,6 +47,11 @@ pub enum AstKind {
     },
     /// An integer literal.
     Integer,
+    /// A boolean literal: `true` or `false`.
+    BooleanLiteral(
+        /// The literal's value.
+        bool,
+    ),
     /// An identifier reference.
     Identifier,
     /// A parenthesized expression.
@@ -66,8 +73,8 @@ pub enum AstKind {
     },
     /// An infix operator expression.
     Binary {
-        /// The operator character.
-        operator: char,
+        /// The operator.
+        operator: BinaryOperator,
         /// The left operand.
         left: Box<AstNode>,
         /// The right operand.
@@ -80,6 +87,62 @@ pub enum AstKind {
         /// The assigned expression.
         value: Box<AstNode>,
     },
+}
+
+/// An infix binary operator.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BinaryOperator {
+    /// `+`
+    Add,
+    /// `-`
+    Sub,
+    /// `*`
+    Mul,
+    /// `/`
+    Div,
+    /// `%`
+    Rem,
+    /// `^` (exponentiation)
+    Pow,
+    /// `<`
+    Less,
+    /// `>`
+    Greater,
+    /// `<=`
+    LessEqual,
+    /// `>=`
+    GreaterEqual,
+    /// `==`
+    Equal,
+    /// `!=`
+    NotEqual,
+    /// `&` (logical and)
+    And,
+    /// `|` (logical or)
+    Or,
+}
+
+impl fmt::Display for BinaryOperator {
+    /// Formats the operator as its source symbol.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let symbol = match self {
+            Self::Add => "+",
+            Self::Sub => "-",
+            Self::Mul => "*",
+            Self::Div => "/",
+            Self::Rem => "%",
+            Self::Pow => "^",
+            Self::Less => "<",
+            Self::Greater => ">",
+            Self::LessEqual => "<=",
+            Self::GreaterEqual => ">=",
+            Self::Equal => "==",
+            Self::NotEqual => "!=",
+            Self::And => "&",
+            Self::Or => "|",
+        };
+        f.write_str(symbol)
+    }
 }
 
 /// Builds an [`AstNode`] from a stream of [`Token`]s.
@@ -281,6 +344,11 @@ impl Parser {
                 self.advance();
                 Some(AstNode::new(token.span, AstKind::Integer))
             }
+            TokenKind::Keyword(Keyword::True | Keyword::False) => {
+                self.advance();
+                let value = token.kind == TokenKind::Keyword(Keyword::True);
+                Some(AstNode::new(token.span, AstKind::BooleanLiteral(value)))
+            }
             TokenKind::Ident => {
                 self.advance();
                 Some(AstNode::new(token.span, AstKind::Identifier))
@@ -354,11 +422,25 @@ impl Parser {
     }
 
     /// Returns the infix operator at the current position, if any.
-    fn infix_operator(&self) -> Option<char> {
+    fn infix_operator(&self) -> Option<BinaryOperator> {
         match self.tokens.get(self.cursor).map(|token| token.kind) {
-            Some(TokenKind::Punctuation(operator)) if precedence(operator).is_some() => {
-                Some(operator)
-            }
+            Some(TokenKind::Punctuation(operator)) => match operator {
+                '|' => Some(BinaryOperator::Or),
+                '&' => Some(BinaryOperator::And),
+                '<' => Some(BinaryOperator::Less),
+                '>' => Some(BinaryOperator::Greater),
+                '+' => Some(BinaryOperator::Add),
+                '-' => Some(BinaryOperator::Sub),
+                '*' => Some(BinaryOperator::Mul),
+                '/' => Some(BinaryOperator::Div),
+                '%' => Some(BinaryOperator::Rem),
+                '^' => Some(BinaryOperator::Pow),
+                _ => None,
+            },
+            Some(TokenKind::LessEqual) => Some(BinaryOperator::LessEqual),
+            Some(TokenKind::GreaterEqual) => Some(BinaryOperator::GreaterEqual),
+            Some(TokenKind::EqualEqual) => Some(BinaryOperator::Equal),
+            Some(TokenKind::NotEqual) => Some(BinaryOperator::NotEqual),
             _ => None,
         }
     }
@@ -456,24 +538,30 @@ const MAX_NESTING_DEPTH: usize = 256;
 /// These constants are used to determine the order of operations in expressions.
 const PRECEDENCE_OR: u8 = 1;
 const PRECEDENCE_AND: u8 = 2;
-const PRECEDENCE_COMPARISON: u8 = 3;
-const PRECEDENCE_ADDITIVE: u8 = 4;
-const PRECEDENCE_MULTIPLICATIVE: u8 = 5;
-const PRECEDENCE_EXPONENTIATION: u8 = 6;
+const PRECEDENCE_EQUALITY: u8 = 3;
+const PRECEDENCE_RELATIONAL: u8 = 4;
+const PRECEDENCE_ADDITIVE: u8 = 5;
+const PRECEDENCE_MULTIPLICATIVE: u8 = 6;
+const PRECEDENCE_EXPONENTIATION: u8 = 7;
 
 /// Returns the precedence level of an infix operator.
 ///
-/// Returns `None` for characters that are not valid infix operators.
-/// Higher values indicate tighter binding (evaluated first).
-fn precedence(operator: char) -> Option<u8> {
+/// Higher values indicate tighter binding (evaluated first). All operators
+/// are left-associative.
+fn precedence(operator: BinaryOperator) -> Option<u8> {
     match operator {
-        '|' => Some(PRECEDENCE_OR),
-        '&' => Some(PRECEDENCE_AND),
-        '<' | '>' => Some(PRECEDENCE_COMPARISON),
-        '+' | '-' => Some(PRECEDENCE_ADDITIVE),
-        '*' | '/' | '%' => Some(PRECEDENCE_MULTIPLICATIVE),
-        '^' => Some(PRECEDENCE_EXPONENTIATION),
-        _ => None,
+        BinaryOperator::Or => Some(PRECEDENCE_OR),
+        BinaryOperator::And => Some(PRECEDENCE_AND),
+        BinaryOperator::Equal | BinaryOperator::NotEqual => Some(PRECEDENCE_EQUALITY),
+        BinaryOperator::Less
+        | BinaryOperator::Greater
+        | BinaryOperator::LessEqual
+        | BinaryOperator::GreaterEqual => Some(PRECEDENCE_RELATIONAL),
+        BinaryOperator::Add | BinaryOperator::Sub => Some(PRECEDENCE_ADDITIVE),
+        BinaryOperator::Mul | BinaryOperator::Div | BinaryOperator::Rem => {
+            Some(PRECEDENCE_MULTIPLICATIVE)
+        }
+        BinaryOperator::Pow => Some(PRECEDENCE_EXPONENTIATION),
     }
 }
 
@@ -508,11 +596,43 @@ mod tests {
         let AstKind::Let { value, .. } = &statements[0].kind else {
             unreachable!()
         };
-        assert!(matches!(value.kind, AstKind::Binary { operator: '+', .. }));
+        assert!(matches!(
+            value.kind,
+            AstKind::Binary {
+                operator: BinaryOperator::Add,
+                ..
+            }
+        ));
         let AstKind::Binary { right, .. } = &value.kind else {
             unreachable!()
         };
-        assert!(matches!(right.kind, AstKind::Binary { operator: '*', .. }));
+        assert!(matches!(
+            right.kind,
+            AstKind::Binary {
+                operator: BinaryOperator::Mul,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn parses_equality_looser_than_relational_and_tighter_than_and() {
+        // `a < b == c & d` must group as `(a < b == c) & d`: relational binds
+        // tighter than equality, which binds tighter than logical and.
+        let (ast, sink) = parse("a < b == c & d;");
+
+        assert!(!sink.has_errors());
+        let AstKind::Program { statements } = ast.kind else {
+            panic!("expected program")
+        };
+        let AstKind::Binary { operator, left, .. } = &statements[0].kind else {
+            panic!("expected binary expression")
+        };
+        assert_eq!(*operator, BinaryOperator::And);
+        let AstKind::Binary { operator, .. } = &left.kind else {
+            panic!("expected binary expression")
+        };
+        assert_eq!(*operator, BinaryOperator::Equal);
     }
 
     #[test]
@@ -661,6 +781,18 @@ mod tests {
         let (_ast, sink) = parse(";;;");
 
         assert!(!sink.has_errors());
+    }
+
+    #[test]
+    fn parses_boolean_literals() {
+        let (ast, sink) = parse("true; false;");
+
+        assert!(!sink.has_errors());
+        let AstKind::Program { statements } = ast.kind else {
+            panic!("expected program")
+        };
+        assert_eq!(statements[0].kind, AstKind::BooleanLiteral(true));
+        assert_eq!(statements[1].kind, AstKind::BooleanLiteral(false));
     }
 
     #[test]

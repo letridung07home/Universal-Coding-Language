@@ -13,7 +13,8 @@ evaluator, command-line interface, and source-aware diagnostics.
 ## Current features
 
 - Signed 64-bit integers and booleans
-- Checked arithmetic and comparison operators
+- Checked arithmetic, comparison, and equality operators
+- Short-circuiting logical operators
 - `let` declarations and assignment
 - Blocks with lexical scoping
 - Line comments beginning with `//`

@@ -83,7 +83,9 @@ fn eval_expression(source_text: &str) -> (Value, bool) {
     let tokens = Lexer::new(&source).tokenize(&mut sink);
     let ast = Parser::new(tokens).parse(&mut sink);
     let value = match ast {
-        Some(ast) => Evaluator::new().evaluate(&ast, &source, &mut sink),
+        Some(ast) => Evaluator::new()
+            .evaluate(&ast, &source, &mut sink)
+            .unwrap_or(Value::Unit),
         None => Value::Unit,
     };
     (value, sink.has_errors())

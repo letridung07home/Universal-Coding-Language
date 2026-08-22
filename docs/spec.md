@@ -50,12 +50,18 @@ comment ::= "//" [^\n]*
 identifier ::= [A-Za-z_] [A-Za-z0-9_]*
 ```
 
-Identifiers name bindings. The word `let` is a reserved keyword: the lexer
-produces a dedicated keyword token for it, and it cannot be used as an
-identifier. The parser recognizes declarations from that keyword token rather
-than from the token shape.
+Identifiers name bindings. The words `let`, `true`, and `false` are reserved
+keywords: the lexer produces dedicated keyword tokens for them, and they
+cannot be used as identifiers. The parser recognizes declarations from the
+`let` keyword token rather than from the token shape.
 
-### 2.5 Integer literals
+### 2.5 Boolean literals
+
+```
+boolean-literal ::= "true" | "false"
+```
+
+### 2.6 Integer literals
 
 ```
 integer-literal ::= [0-9]+
@@ -66,14 +72,16 @@ An integer literal is a non-negative decimal numeral. It must fit in a signed
 written as a unary `-` applied to a positive literal (there is no negative
 literal syntax).
 
-### 2.6 Punctuation
+### 2.7 Punctuation
 
-The characters `( ) { } ; = + - * / % ^ < > & | !` are significant. Any other
-ASCII punctuation character is tokenized as punctuation; one that no parser
-production accepts produces an error at that position. The two-character
-sequence `//` begins a comment (§2.3) and is not tokenized as punctuation.
+The characters `( ) { } ; = + - * / % ^ < > & | !` are significant. The
+two-character sequences `<=`, `>=`, `==`, and `!=` are tokenized as single
+operator tokens (§4.2). Any other ASCII punctuation character is tokenized as
+punctuation; one that no parser production accepts produces an error at that
+position. The two-character sequence `//` begins a comment (§2.3) and is not
+tokenized as punctuation.
 
-### 2.7 Unrecognized characters
+### 2.8 Unrecognized characters
 
 A non-ASCII character (or any character not covered above) is reported as an
 error and skipped, so scanning continues after it.
@@ -84,10 +92,7 @@ error and skipped, so scanning continues after it.
 |---------|------------------------------------------|------------------|
 | `unit`  | A single value with no contents.         | result of a declaration |
 | `integer` | A signed 64-bit integer.               | `42`, `2 + 3`    |
-| `boolean` | `true` or `false`.                      | `1 < 2`          |
-
-There are no boolean *literals*: boolean values arise only from the comparison
-and boolean operators described below.
+| `boolean` | `true` or `false`.                     | `true`, `1 < 2`  |
 
 *Future work.* Strings, functions, and the rest of the type system.
 
@@ -100,6 +105,7 @@ binary-expression ::= unary-expression
 unary-expression ::= prefix-operator unary-expression
                     | primary
 primary         ::= integer-literal
+                  | boolean-literal
                   | identifier
                   | "(" expression ")"
                   | block
@@ -108,6 +114,7 @@ primary         ::= integer-literal
 A *primary* is:
 
 - an **integer literal**, evaluating to that integer;
+- a **boolean literal**, evaluating to that boolean;
 - an **identifier**, evaluating to the value of the referenced binding (an
   unbound identifier is an error);
 - a **parenthesized expression** `( expression )`, evaluating to the inner
@@ -135,18 +142,24 @@ tightest to loosest below:
 
 | Precedence | Operators | Operand types | Result | Notes |
 |------------|-----------|---------------|--------|-------|
-| 6 (highest) | `^` | integer, integer | integer | exponentiation; the exponent must be non-negative |
-| 5 | `*` `/` `%` | integer, integer | integer | checked arithmetic; `/` and `%` by zero are errors |
-| 4 | `+` `-` | integer, integer | integer | checked arithmetic |
-| 3 | `<` `>` | integer, integer | boolean | comparison |
-| 2 | `&` | boolean, boolean | boolean | logical and |
-| 1 (lowest) | `\|` | boolean, boolean | boolean | logical or |
+| 7 (highest) | `^` | integer, integer | integer | exponentiation; the exponent must be non-negative |
+| 6 | `*` `/` `%` | integer, integer | integer | checked arithmetic; `/` and `%` by zero are errors |
+| 5 | `+` `-` | integer, integer | integer | checked arithmetic |
+| 4 | `<` `>` `<=` `>=` | integer, integer | boolean | relational comparison |
+| 3 | `==` `!=` | both integers or both booleans | boolean | equality |
+| 2 | `&` | boolean, boolean | boolean | logical and, short-circuiting |
+| 1 (lowest) | `\|` | boolean, boolean | boolean | logical or, short-circuiting |
 
 Because every binary operator is left-associative, `2 ^ 3 ^ 2` is `(2 ^ 3) ^
 2` (that is, `64`), and `a - b - c` is `(a - b) - c`.
 
 `&` and `|` are logical operators on booleans only, not bitwise operators on
-integers. There are no `<=`, `>=`, `==`, or `!=` operators.
+integers. Both *short-circuit*: `&` does not evaluate its right-hand side when
+the left-hand side is `false`, and `|` does not evaluate it when the left-hand
+side is `true`. Errors in a skipped operand are therefore not reported.
+
+Equality (`==`, `!=`) is defined for two integers or two booleans; comparing
+values of different types is an error.
 
 Integer arithmetic is *checked*: addition, subtraction, multiplication,
 negation, and exponentiation that overflow the signed 64-bit range, and
@@ -219,8 +232,9 @@ empty.
 3. The tree is evaluated (evaluator).
 
 A program's value is the value of its last statement, or `unit` if the program
-is empty or an error occurred. The `ucl` CLI prints the program's value, except
-that `unit` prints nothing.
+is empty. If any stage of the pipeline reports an error, no value is produced:
+later stages do not run, and the `ucl` CLI prints nothing and exits with a
+failure status.
 
 ## 7. Errors and diagnostics
 
@@ -236,14 +250,21 @@ source span. Errors include:
 - integer overflow in checked arithmetic;
 - division or remainder by zero;
 - negative exponents;
-- operators applied to operands of the wrong type;
+- operators applied to operands of the wrong type, including equality
+  comparisons between values of different types;
 - expression nesting that exceeds the parser's or evaluator's depth limit.
 
 The parser rejects expressions nested more than a fixed depth (currently 256
-levels) to prevent stack overflow on pathological input. The evaluator enforces
-a separate, higher limit as a safety net for deeply nested ASTs constructed
-through the library API. Deeper nesting is reported as an error.
+levels) to prevent stack overflow on pathological input. The evaluator
+enforces a separate, higher limit as a safety net for deeply nested ASTs
+constructed through the library API; binary operator chains do not count
+toward nesting and may be arbitrarily long. Deeper nesting is reported as an
+error.
 
 Lexical and syntactic analysis recover and continue after an error where
 possible, so a single run may report more than one diagnostic. Diagnostics are
 rendered with a source excerpt pointing at the offending span.
+
+Each pipeline stage runs only if the previous stage completed without errors:
+a program with lexical errors is not parsed, and one with syntax errors is not
+evaluated.
