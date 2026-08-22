@@ -11,6 +11,7 @@
 pub mod diagnostic;
 pub mod evaluator;
 pub mod lexer;
+mod module;
 pub mod parser;
 pub mod source;
 

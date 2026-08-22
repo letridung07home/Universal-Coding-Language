@@ -2,6 +2,14 @@
 
 All notable changes to UCL are documented here.
 
+## 0.8.2 - 2026-08-22
+
+### Changed
+
+- Internal refactor: all module-loading logic (`use` statements, path
+  resolution, cycle detection, import merging) moved from `evaluator.rs`
+  into a dedicated `module.rs`. No public API or behavior change.
+
 ## 0.8.1 - 2026-08-22
 
 ### Added
