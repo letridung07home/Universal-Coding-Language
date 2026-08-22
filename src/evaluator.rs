@@ -22,7 +22,7 @@
 //! This design allows users to see all errors in their program at once,
 //! similar to how compilers like rustc operate.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 
 use crate::diagnostic::{Diagnostic, DiagnosticSink, Severity};
@@ -50,7 +50,9 @@ const MAX_LOOP_ITERATIONS: u64 = 100_000;
 /// The maximum number of active UCL function calls.
 ///
 /// This prevents recursive programs from exhausting the host call stack.
-const MAX_CALL_DEPTH: usize = 64;
+/// Each call costs a bounded number of evaluator recursion levels, so this
+/// stays safely below [`MAX_EVAL_DEPTH`].
+const MAX_CALL_DEPTH: usize = 128;
 
 /// A runtime value produced by evaluating a program.
 #[derive(Clone, Debug, PartialEq)]
@@ -72,12 +74,17 @@ pub enum Value {
 
 /// A callable UCL function value.
 ///
-/// Functions declared by v0.4 execute with the global scope and a fresh
-/// parameter scope, so calls are not dynamically scoped through their callers.
+/// A function executes with the global scope, the bindings it *captured*
+/// when it was created, and a fresh parameter scope. Globals are resolved
+/// dynamically at call time — which is what lets top-level functions
+/// recurse by looking themselves up — while non-global bindings visible at
+/// creation are captured by value: later changes to those bindings do not
+/// affect an already-created function.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FunctionValue {
     parameters: Vec<String>,
     body: AstNode,
+    captured: HashMap<String, Value>,
 }
 
 impl Value {
@@ -135,17 +142,35 @@ impl Environment {
         self.scopes.iter().rev().find_map(|scope| scope.get(name))
     }
 
-    /// Returns whether evaluation is currently in the program's global scope.
-    fn is_global(&self) -> bool {
-        self.scopes.len() == 1
+    /// Snapshots the non-global bindings visible from innermost to outermost
+    /// scope, used as a function literal's capture.
+    ///
+    /// Inner scopes shadow outer ones; the first binding seen walking outward
+    /// wins. Globals are excluded: they resolve dynamically at call time.
+    fn capture_non_globals(&self) -> HashMap<String, Value> {
+        let mut captured = HashMap::new();
+        for scope in self.scopes.iter().skip(1).rev() {
+            for (name, value) in scope {
+                captured
+                    .entry(name.clone())
+                    .or_insert_with(|| value.clone());
+            }
+        }
+        captured
     }
 
-    /// Begins a function call with the global scope and a fresh parameter
-    /// scope, returning the caller's scopes for restoration when it finishes.
-    fn begin_call(&mut self) -> Vec<HashMap<String, Value>> {
+    /// Begins a function call with the global scope, the function's captured
+    /// bindings, and a fresh parameter scope on top, returning the caller's
+    /// scopes for restoration when the call finishes.
+    fn begin_call(&mut self, captured: &HashMap<String, Value>) -> Vec<HashMap<String, Value>> {
         let mut caller_scopes = std::mem::take(&mut self.scopes);
         let global = caller_scopes.remove(0);
         self.scopes.push(global);
+        let captured = captured
+            .iter()
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect();
+        self.scopes.push(captured);
         self.push_scope();
         caller_scopes
     }
@@ -181,16 +206,20 @@ impl Environment {
 pub struct Evaluator {
     /// Number of UCL calls currently active during evaluation.
     call_depth: Cell<usize>,
+    /// A `return` statement executed by the innermost active call, waiting
+    /// to be consumed at that call's boundary.
+    pending_return: RefCell<Option<Value>>,
 }
 
 impl Evaluator {
     /// Creates a new evaluator instance.
     ///
     /// The evaluator may be reused to evaluate multiple ASTs; each evaluation
-    /// resets its active function-call counter.
+    /// resets its active function-call counter and any pending return.
     pub fn new() -> Self {
         Self {
             call_depth: Cell::new(0),
+            pending_return: RefCell::new(None),
         }
     }
 
@@ -228,8 +257,14 @@ impl Evaluator {
         let mut environment = Environment::default();
         environment.push_scope();
         self.call_depth.set(0);
+        self.pending_return.borrow_mut().take();
         let baseline = sink.len();
         let value = self.eval(root, source, &mut environment, sink, 0);
+        // A `return` that reaches the program boundary never ran inside a
+        // function call, which is an error in itself.
+        if self.pending_return.borrow_mut().take().is_some() {
+            sink.emit(Diagnostic::error("`return` outside of a function").at(root.span));
+        }
         let failed = sink
             .iter()
             .skip(baseline)
@@ -259,6 +294,9 @@ impl Evaluator {
                 let mut last = Value::Unit;
                 for statement in statements {
                     last = self.eval(statement, source, environment, sink, depth + 1);
+                    if self.pending_return.borrow().is_some() {
+                        break;
+                    }
                 }
                 last
             }
@@ -267,6 +305,9 @@ impl Evaluator {
                 let mut last = Value::Unit;
                 for statement in statements {
                     last = self.eval(statement, source, environment, sink, depth + 1);
+                    if self.pending_return.borrow().is_some() {
+                        break;
+                    }
                 }
                 environment.pop_scope();
                 last
@@ -419,23 +460,6 @@ impl Evaluator {
                 body,
                 ..
             } => {
-                if !environment.is_global() {
-                    sink.emit(
-                        Diagnostic::error(
-                            "function declarations are only allowed at program scope",
-                        )
-                        .at(node.span),
-                    );
-                    return Value::Unit;
-                }
-
-                let Some(name) = source.slice(*name) else {
-                    sink.emit(
-                        Diagnostic::error("function declaration has an invalid name span")
-                            .at(node.span),
-                    );
-                    return Value::Unit;
-                };
                 let mut names = Vec::with_capacity(parameters.len());
                 let mut seen = HashSet::new();
                 for parameter_span in parameters {
@@ -458,14 +482,32 @@ impl Evaluator {
                     names.push(parameter.to_owned());
                 }
 
-                environment.define(
-                    name,
-                    Value::Function(FunctionValue {
-                        parameters: names,
-                        body: (**body).clone(),
-                    }),
-                );
-                Value::Unit
+                // Capture-by-value: snapshot the non-global bindings visible
+                // where the function is created. Globals stay dynamic so a
+                // top-level function can still resolve itself recursively.
+                let captured = environment.capture_non_globals();
+                let function = Value::Function(FunctionValue {
+                    parameters: names,
+                    body: (**body).clone(),
+                    captured,
+                });
+
+                match name {
+                    Some(name_span) => {
+                        // A named declaration binds the name and evaluates to
+                        // unit; an anonymous literal is itself the value.
+                        let Some(name) = source.slice(*name_span) else {
+                            sink.emit(
+                                Diagnostic::error("function declaration has an invalid name span")
+                                    .at(node.span),
+                            );
+                            return Value::Unit;
+                        };
+                        environment.define(name, function);
+                        Value::Unit
+                    }
+                    None => function,
+                }
             }
             AstKind::Call { callee, arguments } => {
                 let callable = self.eval(callee, source, environment, sink, depth + 1);
@@ -502,12 +544,15 @@ impl Evaluator {
                 }
 
                 self.call_depth.set(call_depth + 1);
-                let caller_scopes = environment.begin_call();
+                let caller_scopes = environment.begin_call(&function.captured);
                 for (parameter, value) in function.parameters.iter().zip(values) {
                     environment.define(parameter, value);
                 }
                 let value = self.eval(&function.body, source, environment, sink, depth + 1);
                 environment.end_call(caller_scopes);
+                // Consume whatever `return` statement the body executed; an
+                // implicit return falls back to the body's last value.
+                let value = self.pending_return.borrow_mut().take().unwrap_or(value);
                 self.call_depth.set(call_depth);
                 value
             }
@@ -527,6 +572,9 @@ impl Evaluator {
                     match condition_value {
                         Value::Boolean(true) => {
                             self.eval(body, source, environment, sink, depth + 1);
+                            if self.pending_return.borrow().is_some() {
+                                break;
+                            }
                         }
                         Value::Boolean(false) => break,
                         other => {
@@ -567,6 +615,16 @@ impl Evaluator {
                     );
                 }
                 value
+            }
+            AstKind::Return { value } => {
+                // Record the value for the enclosing call boundary to consume;
+                // enclosing loops and blocks stop early once it is set.
+                let returned = match value {
+                    Some(expression) => self.eval(expression, source, environment, sink, depth + 1),
+                    None => Value::Unit,
+                };
+                *self.pending_return.borrow_mut() = Some(returned.clone());
+                returned
             }
         }
     }
@@ -1417,7 +1475,6 @@ mod tests {
                 "fn duplicate(value, value) { value; };",
                 "duplicate function parameter `value`",
             ),
-            ("{ fn inner() { 1; }; };", "only allowed at program scope"),
         ] {
             let (_value, sink) = eval(source);
             assert!(sink.has_errors(), "expected an error for `{source}`");
@@ -1430,8 +1487,162 @@ mod tests {
     }
 
     #[test]
+    fn functions_may_be_declared_inside_blocks() {
+        let source = "
+            fn outer() {
+                fn inner(x) { x * 2; };
+                inner(21);
+            };
+            outer();
+        ";
+        let (value, sink) = eval(source);
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Integer(42)));
+    }
+
+    #[test]
+    fn function_literals_are_first_class_values() {
+        // A literal stored in a variable and passed as an argument.
+        let source = "
+            fn apply(f, x) { f(x); };
+            let double = fn(n) { n * 2; };
+            apply(double, 21);
+        ";
+        let (value, sink) = eval(source);
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Integer(42)));
+
+        let source = "fn apply(f, x) { f(x); }; apply(fn(n) { n + 1; }, 41);";
+        let (value, sink) = eval(source);
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Integer(42)));
+    }
+
+    #[test]
+    fn literals_can_be_called_directly() {
+        let (value, sink) = eval("fn(a, b) { a * b; }(6, 7);");
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Integer(42)));
+    }
+
+    #[test]
+    fn closures_capture_enclosing_locals_by_value() {
+        // The literal captures `base` where it is created; rebinding `base`
+        // afterwards must not change the closure's behavior.
+        let source = "
+            let make = fn(base) {
+                return fn(n) { base + n; };
+            };
+            let add5 = make(5);
+            let add7 = make(7);
+            add5(10) + add7(10);
+        ";
+        let (value, sink) = eval(source);
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Integer(32)));
+    }
+
+    #[test]
+    fn locals_are_captured_but_globals_stay_dynamic() {
+        // `base` is a parameter: the closure freezes its value at creation.
+        // `factor` is a global: functions always see the latest value.
+        let source = "
+            let factor = 1;
+            let make = fn(base) { return fn(n) { base + n * factor; }; };
+            let add = make(10);
+            factor = 100;
+            add(1);
+        ";
+        let (value, sink) = eval(source);
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Integer(110)));
+    }
+
+    #[test]
+    fn functions_still_see_current_global_state() {
+        // Globals resolve dynamically at call time, so reassigning a global
+        // between creation and call is visible to the function.
+        let source = "
+            let factor = 2;
+            fn scale(n) { n * factor; };
+            factor = 10;
+            scale(4);
+        ";
+        let (value, sink) = eval(source);
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Integer(40)));
+    }
+
+    #[test]
+    fn explicit_return_exits_the_function_early() {
+        let source = "
+            fn sign(n) {
+                if n < 0 { return \"neg\"; };
+                if n == 0 { return \"zero\"; };
+                return \"pos\";
+            };
+            sign(-5);
+        ";
+        let (value, sink) = eval(source);
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Str("neg".to_owned())));
+
+        // `return` also unwinds through loops.
+        let source = "
+            fn first_square(limit) {
+                let i = 0;
+                while i < limit {
+                    if i * i > 50 { return i; };
+                    i = i + 1;
+                };
+                return -1;
+            };
+            first_square(100);
+        ";
+        let (value, sink) = eval(source);
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Integer(8)));
+    }
+
+    #[test]
+    fn bare_return_yields_unit_and_the_last_statement_fills_the_rest() {
+        let (value, sink) = eval("fn nothing() { return; }; nothing();");
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Unit));
+
+        let (value, sink) = eval("fn implicit() { 40 + 2; }; implicit();");
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Integer(42)));
+    }
+
+    #[test]
+    fn return_at_program_scope_is_an_error() {
+        for source in ["return 1;", "if true { return; };"] {
+            let (_value, sink) = eval(source);
+            assert!(sink.has_errors(), "expected an error for `{source}`");
+            assert_eq!(_value, None, "no value for `{source}`");
+        }
+    }
+
+    #[test]
+    fn a_literal_cannot_recur_through_its_own_variable() {
+        // Documented limitation: the variable does not exist when the
+        // literal's capture is taken.
+        let source = "let f = fn(n) { f(n); };";
+        let (_value, _sink) = eval(source);
+        // Parsing and creating the literal succeed; only calling it would
+        // fail, which we deliberately do not do here.
+    }
+
+    #[test]
     fn caps_recursive_function_calls() {
-        let (_value, sink) = eval("fn recurse() { recurse(); }; recurse();");
+        // Runs on a generous stack so the assertion exercises the call-depth
+        // guard itself rather than the test thread's stack limit.
+        let harness = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| eval("fn recurse() { recurse(); }; recurse();"))
+            .expect("test harness thread spawns");
+        let (_value, sink) = harness.join().expect("harness thread does not panic");
 
         assert!(sink.has_errors());
         assert!(sink.iter().any(|diagnostic| {

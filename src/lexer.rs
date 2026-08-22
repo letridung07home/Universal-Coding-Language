@@ -20,6 +20,8 @@ pub enum Keyword {
     While,
     /// The `fn` function-declaration keyword.
     Function,
+    /// The `return` statement keyword.
+    Return,
 }
 
 /// The kind of a lexical token.
@@ -130,6 +132,7 @@ impl<'src> Lexer<'src> {
                     "else" => TokenKind::Keyword(Keyword::Else),
                     "while" => TokenKind::Keyword(Keyword::While),
                     "fn" => TokenKind::Keyword(Keyword::Function),
+                    "return" => TokenKind::Keyword(Keyword::Return),
                     _ => TokenKind::Ident,
                 };
                 tokens.push(Token {

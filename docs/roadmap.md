@@ -23,7 +23,7 @@ concrete implementation work should be tracked in issues as it is scheduled.
 - [x] Add strings and string operations
 - [x] Add conditional and looping constructs
 - [x] Add named functions, parameters, calls, implicit return values, and recursion
-- [ ] Add function literals, nested functions, explicit `return` statements, and closures
+- [x] Add function literals, nested functions, explicit `return` statements, and closures
 
 ## Tooling and ecosystem
 

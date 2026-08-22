@@ -112,12 +112,16 @@ pub enum AstKind {
         /// The block evaluated once per iteration.
         body: Box<AstNode>,
     },
-    /// A named function declaration: `fn name(parameters) { ... }`.
+    /// A function declaration or literal: `fn name(parameters) { ... }` or
+    /// `fn(parameters) { ... }`.
+    ///
+    /// A declaration binds `name` in the enclosing scope; a literal is an
+    /// anonymous expression value.
     Function {
         /// Span of the declaration keyword.
         keyword: Span,
-        /// Span of the declared function name.
-        name: Span,
+        /// Span of the declared function name, if any.
+        name: Option<Span>,
         /// Spans of the parameter names in source order.
         parameters: Vec<Span>,
         /// The function body.
@@ -129,6 +133,11 @@ pub enum AstKind {
         callee: Box<AstNode>,
         /// Arguments in source order.
         arguments: Vec<AstNode>,
+    },
+    /// A return statement: `return expression;` or `return;`.
+    Return {
+        /// The returned expression, if any. A bare `return` returns unit.
+        value: Option<Box<AstNode>>,
     },
 }
 
@@ -293,8 +302,26 @@ impl Parser {
             ));
         }
 
-        if self.check_keyword(Keyword::Function) {
+        // A named declaration (`fn name(...)`) is a statement; an anonymous
+        // literal (`fn(...)`) falls through to expression parsing so call
+        // syntax like `fn(x) { x; }(1);` works.
+        if self.check_keyword(Keyword::Function) && self.peek_is_ident() {
             return self.parse_function(sink);
+        }
+
+        // `return` is a statement, not an expression.
+        if self.check_keyword(Keyword::Return) {
+            let keyword = self.advance().span;
+            let value = if self.check_punctuation(';') || self.at_eof() {
+                None
+            } else {
+                Some(Box::new(self.parse_expression(0, sink)?))
+            };
+            let end = value.as_ref().map_or(keyword.end, |value| value.span.end);
+            return Some(AstNode::new(
+                Span::new(keyword.start, end),
+                AstKind::Return { value },
+            ));
         }
 
         // A `while` loop is a statement, not an expression: it evaluates to
@@ -444,6 +471,11 @@ impl Parser {
                 Some(AstNode::new(token.span, AstKind::BooleanLiteral(value)))
             }
             TokenKind::Keyword(Keyword::If) => self.parse_if(sink),
+            // An anonymous function literal: `fn(x) { ... }`. Named
+            // declarations are handled at statement level.
+            TokenKind::Keyword(Keyword::Function) if self.peek_is_open_paren() => {
+                self.parse_function(sink)
+            }
             TokenKind::StringLiteral => {
                 self.advance();
                 Some(AstNode::new(token.span, AstKind::StringLiteral))
@@ -535,14 +567,16 @@ impl Parser {
     /// Parses a named function declaration: `fn name(parameters) { ... }`.
     fn parse_function(&mut self, sink: &mut DiagnosticSink) -> Option<AstNode> {
         let keyword = self.advance().span;
-        if !self.check_kind(TokenKind::Ident) {
-            self.error_current("expected an identifier after `fn`", sink);
-            return None;
-        }
-        let name = self.advance().span;
+        // An identifier makes this a named declaration; its absence starts
+        // an anonymous function literal (`fn(x) { ... }`).
+        let name = if self.check_kind(TokenKind::Ident) {
+            Some(self.advance().span)
+        } else {
+            None
+        };
 
         if !self.consume_punctuation('(') {
-            self.error_current("expected `(` after the function name", sink);
+            self.error_current("expected `(` after `fn`", sink);
             return None;
         }
 
@@ -634,6 +668,23 @@ impl Parser {
             self.error_current("expected `}`", sink);
             None
         }
+    }
+
+    /// Returns true if the token after the current one is `(`.
+    ///
+    /// Used to distinguish a function literal (`fn(`) from a named
+    /// declaration (`fn name(`) in expression position.
+    fn peek_is_open_paren(&self) -> bool {
+        self.tokens
+            .get(self.cursor + 1)
+            .is_some_and(|token| token.kind == TokenKind::Punctuation('('))
+    }
+
+    /// Returns true if the token after the current one is an identifier.
+    fn peek_is_ident(&self) -> bool {
+        self.tokens
+            .get(self.cursor + 1)
+            .is_some_and(|token| token.kind == TokenKind::Ident)
     }
 
     /// Returns the infix operator at the current position, if any.
@@ -1162,5 +1213,81 @@ mod tests {
             sink.iter()
                 .any(|diagnostic| diagnostic.message.contains("expected `}`"))
         );
+    }
+
+    #[test]
+    fn parses_function_literals_in_expression_position() {
+        for source in ["let f = fn(x) { x; };", "fn(x) { x; };"] {
+            let (ast, sink) = parse(source);
+
+            assert!(!sink.has_errors(), "for `{source}`");
+            let AstKind::Program { statements } = ast.kind else {
+                panic!("expected program")
+            };
+            let function = match &statements[0].kind {
+                AstKind::Let { value, .. } => value.as_ref(),
+                other => match other {
+                    AstKind::Function { .. } => &statements[0],
+                    _ => panic!("unexpected statement for `{source}`"),
+                },
+            };
+            let AstKind::Function { name: None, .. } = &function.kind else {
+                panic!("expected an anonymous literal for `{source}`")
+            };
+        }
+    }
+
+    #[test]
+    fn parses_calls_of_function_literals() {
+        let (ast, sink) = parse("fn(a) { a; }(1);");
+
+        assert!(!sink.has_errors());
+        let AstKind::Program { statements } = ast.kind else {
+            panic!("expected program")
+        };
+        assert!(matches!(statements[0].kind, AstKind::Call { .. }));
+    }
+
+    #[test]
+    fn parses_return_statements() {
+        let (ast, sink) = parse("return 1;");
+        assert!(!sink.has_errors());
+        let AstKind::Program { statements } = ast.kind else {
+            panic!("expected program")
+        };
+        let AstKind::Return { value: Some(value) } = &statements[0].kind else {
+            panic!("expected a return with a value")
+        };
+        assert!(matches!(value.kind, AstKind::Integer));
+
+        let (ast, sink) = parse("return;");
+        assert!(!sink.has_errors());
+        let AstKind::Program { statements } = ast.kind else {
+            panic!("expected program")
+        };
+        assert!(matches!(
+            statements[0].kind,
+            AstKind::Return { value: None }
+        ));
+    }
+
+    #[test]
+    fn return_binds_to_the_following_expression() {
+        // `return 1 + 2;` returns the whole expression, not just `1`.
+        let (ast, sink) = parse("return 1 + 2 * 3;");
+        assert!(!sink.has_errors());
+        let AstKind::Program { statements } = ast.kind else {
+            panic!("expected program")
+        };
+        let AstKind::Return { value: Some(value) } = &statements[0].kind else {
+            panic!("expected a return with a value")
+        };
+        assert!(matches!(
+            value.kind,
+            AstKind::Binary {
+                operator: BinaryOperator::Add,
+                ..
+            }
+        ));
     }
 }

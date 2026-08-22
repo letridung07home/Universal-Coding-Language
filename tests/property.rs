@@ -333,3 +333,50 @@ fn string_concatenation_accumulates_exactly() {
         );
     }
 }
+
+#[test]
+fn function_calls_compute_expected_results() {
+    let mut rng = Rng::new(0x0A11_5EED_0A11_5EED);
+
+    for _ in 0..300 {
+        let a = rng.range(-100, 100);
+        let b = rng.range(-100, 100);
+        // A function taking two parameters, called with generated arguments;
+        // the body returns their sum via an explicit `return`.
+        let source_text = format!("fn add(left, right) {{ return left + right; }}; add({a}, {b});");
+        let (value, had_errors) = eval_expression(&source_text);
+
+        assert!(!had_errors, "unexpected error for `{source_text}`");
+        assert_eq!(
+            value,
+            Value::Integer(a.wrapping_add(b)),
+            "mismatch for `{source_text}`"
+        );
+    }
+}
+
+#[test]
+fn recursion_computes_the_same_result_as_iteration() {
+    // factorial via recursion must agree with a while-loop implementation
+    // over the same inputs.
+    let mut rng = Rng::new(0x00FA_C70F_10FA_C701);
+
+    for _ in 0..50 {
+        let n = rng.below(11);
+        let recursive = format!(
+            "fn fact(n) {{ if n <= 1 {{ return 1; }}; return n * fact(n - 1); }}; fact({n});"
+        );
+        let iterative =
+            format!("let acc = 1; let i = 2; while i <= {n} {{ acc = acc * i; i = i + 1; }}; acc;");
+
+        let (recursive_value, recursive_errors) = eval_expression(&recursive);
+        let (_iterative_value, iterative_errors) = eval_expression(&iterative);
+
+        assert_eq!(recursive_errors, iterative_errors, "for n = {n}");
+        assert_eq!(
+            recursive_value,
+            Value::Integer((1..=n).product::<u64>() as i64),
+            "mismatch for n = {n}"
+        );
+    }
+}

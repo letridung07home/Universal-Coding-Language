@@ -17,6 +17,7 @@ evaluator, command-line interface, and source-aware diagnostics.
 - String concatenation with escape sequences
 - Short-circuiting logical operators
 - `if`/`else` conditionals and `while` loops
+- Functions: declarations, literals, closures, and recursion
 - Named functions, positional parameters, calls, and recursion
 - `let` declarations and assignment
 - Blocks with lexical scoping
@@ -32,9 +33,9 @@ Features not described there should be treated as unsupported.
 Create `example.ucl`:
 
 ```ucl
-fn area(width, height) { width * height; };
-let label = "area";
-if area(6, 7) == 42 { label; } else { "mismatch"; };
+fn area(w, h) { w * h; };
+let describe = fn(n) { if n == 42 { "the answer"; } else { "not quite"; }; };
+describe(area(6, 7));
 ```
 
 Evaluate it:

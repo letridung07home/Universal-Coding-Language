@@ -2,6 +2,31 @@
 
 All notable changes to UCL are documented here.
 
+## 0.5.0 - 2026-08-22
+
+### Added
+
+- Anonymous function literals: `fn(x) { x * 2; }` is an expression producing a
+  `function` value. Literals can be stored, passed as arguments, returned from
+  functions, and called immediately (`fn(a) { a; }(1)`).
+- Nested named function declarations: the v0.4 restriction to program scope is
+  lifted; declarations now bind in any scope.
+- Explicit `return` statements: `return expression;` exits the innermost call
+  immediately (unwinding through blocks and loops); bare `return;` returns
+  unit. A `return` executed outside any function call is an error.
+- Closures with capture-by-value semantics: when a function value is created
+  it snapshots every non-global binding visible at that point. Globals are
+  excluded and always resolve dynamically, preserving recursion of top-level
+  functions. Known limitation: a literal cannot call itself through the
+  variable being defined (`let f = fn(n) { f(n); }`).
+- **Breaking (library API):** `AstKind::Function.name` is now an
+  `Option<Span>`, and new variants `AstKind::Return` were added;
+  `FunctionValue` gained a private capture map.
+
+### Changed
+
+- The maximum active function-call depth was raised from 64 to 128.
+
 ## 0.4.0 - 2026-08-22
 
 ### Added

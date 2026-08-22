@@ -111,9 +111,9 @@ error and skipped, so scanning continues after it.
 | `integer` | A signed 64-bit integer.               | `42`, `2 + 3`    |
 | `boolean` | `true` or `false`.                     | `true`, `1 < 2`  |
 | `string`  | A sequence of Unicode characters.      | `"hello"`, `"a" + "b"` |
-| `function` | A named callable with positional parameters. | `fn add(a, b) { a + b; }` |
+| `function` | A callable with positional parameters. | `fn add(a, b) { a + b; }`, `fn(n) { n; }` |
 
-UCL is **dynamically typed** in v0.4. Values carry runtime types and operators
+UCL is **dynamically typed**. Values carry runtime types and operators
 validate their operands when evaluated; UCL performs no static type checking,
 type annotations, or inference.
 
@@ -129,11 +129,12 @@ unary-expression   ::= prefix-operator unary-expression
 postfix-expression ::= primary ("(" argument-list? ")")*
 argument-list      ::= expression ("," expression)*
 primary            ::= integer-literal
-                  | boolean-literal
-                  | string-literal
-                  | identifier
-                  | "(" expression ")"
-                  | block
+                   | boolean-literal
+                   | string-literal
+                   | function-literal
+                   | identifier
+                   | "(" expression ")"
+                   | block
 if-expression   ::= "if" expression block ("else" (block | if-expression))?
 ```
 
@@ -142,6 +143,7 @@ A *primary* is:
 - an **integer literal**, evaluating to that integer;
 - a **boolean literal**, evaluating to that boolean;
 - a **string literal**, evaluating to that string with escapes decoded;
+- a **function literal**, evaluating to a `function` value (§4.4);
 - an **identifier**, evaluating to the value of the referenced binding (an
   unbound identifier is an error);
 - a **parenthesized expression** `( expression )`, evaluating to the inner
@@ -201,26 +203,55 @@ The `-` operator remains integer-only; there is no string repetition.
 
 Applying a binary operator to operands of the wrong type is an error.
 
-### 4.3 Function calls
-
 A call expression has the form `callee(argument, ...)`. Calls bind more tightly
 than unary and binary operators, so `-negate(2)` means `-(negate(2))`. Calls may
-be chained, although v0.4 has no function literals or function-returning
-functions, so a chained call normally reports a non-callable-value error.
+be chained (`f(x)(y)`), since any expression that produces a function may be
+called immediately.
 
 The callee is evaluated first. Arguments are then evaluated left-to-right before
 the function body begins. The callee must evaluate to a `function` and the
 number of arguments must exactly equal the function's declared parameter count.
 Each parameter receives its corresponding argument value in a fresh call scope.
-A function evaluates to the value of the final statement in its body, or `unit`
-when its body is empty.
+A function evaluates to the value of an executed `return` statement, or the
+value of the final statement in its body when no `return` ran.
 
-Function bodies resolve global bindings and their own parameters. They do not
-resolve bindings in the caller's local blocks; UCL has no dynamic scoping.
-Assignments to global bindings made by a function persist after the call. A
-function's own global name is available in its body, allowing recursion.
+At call time a function sees three layers of bindings: the *current* global
+scope, its own captured bindings (§4.6), and a fresh scope holding its
+parameters. It never resolves bindings from the caller's local blocks; UCL has
+no dynamic scoping. Assignments to globals made by a function persist after
+the call. A top-level function's own name resolves dynamically at call time,
+allowing recursion.
 
-### 4.4 Conditional expressions
+### 4.4 Function literals and closures
+
+```
+function-literal ::= "fn" "(" parameter-list? ")" block
+```
+
+An anonymous function literal is an expression whose value is a `function`.
+Literals may be stored in variables, passed as arguments, returned from other
+functions, and called immediately:
+
+```
+let double = fn(n) { n * 2; };
+double(21);                       // 42
+fn(a, b) { a + b; }(20, 22);      // 42, an immediately invoked literal
+```
+
+When a literal (or named function declared inside a block) is created it
+*captures by value* every non-global binding visible at that point: later
+changes to those bindings do not affect the already-created function, and two
+closures created in the same scope do not observe each other's captures.
+Global bindings are excluded from the capture and always resolve dynamically,
+so functions see the latest global state. A consequence: a literal cannot
+call itself through the variable being defined (`let f = fn(n) { f(n); }`
+fails), while a named top-level declaration can recurse.
+
+The maximum number of active function calls is fixed (currently 128);
+exceeding that bound aborts evaluation with an error instead of overflowing
+the host stack.
+
+### 4.5 Conditional expressions
 
 ```
 if-expression ::= "if" expression block ("else" (block | if-expression))?
@@ -240,7 +271,7 @@ not reported.
 if x < 0 { "negative"; } else if x == 0 { "zero"; } else { "positive"; }
 ```
 
-### 4.5 While loops
+### 4.6 While loops
 
 ```
 while-statement ::= "while" expression block
@@ -261,6 +292,7 @@ that never becomes `false` cannot hang the interpreter.
 program   ::= statement*
 statement ::= declaration
             | function-declaration
+            | return-statement
             | assignment
             | while-statement
             | expression-statement
@@ -289,13 +321,24 @@ function-declaration ::= "fn" identifier "(" parameter-list? ")" block
 parameter-list       ::= identifier ("," identifier)*
 ```
 
-A function declaration may appear only in the program's outermost scope. It
-binds the declared identifier to a function value and itself evaluates to
-`unit`. Parameter names must be unique. Function declarations inside blocks or
-function bodies are runtime errors in v0.4; closures and nested functions are
-future work.
+A function declaration may appear in any scope. It binds the declared
+identifier to a function value and itself evaluates to `unit`. Parameter names
+must be unique. A declaration inside a block or function body additionally
+captures the enclosing non-global bindings, like a literal (§4.4).
 
-### 5.3 Assignment
+### 5.3 Return statement
+
+```
+return-statement ::= "return" expression? ";"
+```
+
+A `return` statement exits the innermost active function call immediately.
+With an expression it makes the call evaluate to that expression's value;
+without one the call evaluates to `unit`. `return` unwinds through nested
+blocks and loop bodies. A `return` that executes outside any function call is
+an error.
+
+### 5.4 Assignment
 
 ```
 assignment ::= identifier "=" expression
@@ -307,13 +350,13 @@ an unbound name is an error; assignment does not create a binding. The
 assignment expression evaluates to the assigned value. The left-hand side must
 be an identifier; any other target is an error.
 
-### 5.4 Expression statement
+### 5.5 Expression statement
 
 An expression may stand alone as a statement; its value is computed and then
 discarded (except that the value of a program's last statement is the
 program's result).
 
-### 5.5 Blocks and scope
+### 5.6 Blocks and scope
 
 ```
 block ::= "{" statement* "}"
@@ -358,9 +401,10 @@ source span. Errors include:
   comparisons between values of different types;
 - `if` or `while` conditions that do not produce a boolean;
 - calls to non-function values or calls with an incorrect argument count;
-- duplicate function parameters or function declarations outside program scope;
+- duplicate function parameters;
+- a `return` statement that executes outside any function call;
 - a loop exceeding the maximum iteration count;
-- a function call exceeding the maximum active-call depth (currently 64);
+- a function call exceeding the maximum active-call depth (currently 128);
 - expression nesting that exceeds the parser's or evaluator's depth limit.
 
 The parser rejects expressions nested more than a fixed depth (currently 256

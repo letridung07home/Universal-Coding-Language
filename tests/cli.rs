@@ -143,6 +143,26 @@ fn non_boolean_conditions_are_runtime_errors() {
 }
 
 #[test]
+fn evaluates_higher_order_functions_end_to_end() {
+    let source = "
+        fn apply(f, x) { f(x); };
+        let twice = fn(n) { n * 2; };
+        apply(twice, apply(fn(n) { n + 1; }, 19));
+    ";
+    let (stdout, stderr, success) = run(source);
+    assert!(success, "stderr: {stderr}");
+    assert_eq!(stdout, "40\n");
+    assert!(stderr.is_empty());
+}
+
+#[test]
+fn return_outside_a_function_is_an_error() {
+    let (_stdout, stderr, success) = run("return 5;");
+    assert!(!success);
+    assert!(stderr.contains("`return` outside of a function"));
+}
+
+#[test]
 fn reports_runtime_errors_with_a_source_excerpt() {
     let (stdout, stderr, success) = run("1 / 0;");
     assert!(!success);
