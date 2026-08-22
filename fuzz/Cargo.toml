@@ -12,6 +12,7 @@ libfuzzer-sys = "0.4"
 
 [dependencies.ucl]
 path = ".."
+package = "universal-coding-language"
 
 # Keep this crate isolated from the parent package: `cargo` at the repository
 # root must not treat `fuzz/` as a workspace member.
