@@ -49,12 +49,35 @@ const MAX_EVAL_DEPTH: usize = 512;
 /// runaway loops; legitimate programs rarely approach it.
 const MAX_LOOP_ITERATIONS: u64 = 100_000;
 
+/// The maximum size of a single string value, measured in UTF-8 bytes.
+///
+/// This keeps repeated concatenation from exhausting host memory. The limit
+/// applies to string literals as well as concatenation results so every string
+/// value returned by the evaluator has the same deterministic bound.
+const MAX_STRING_BYTES: usize = 8 * 1024 * 1024;
+
 /// The maximum number of active UCL function calls.
 ///
 /// This prevents recursive programs from exhausting the host call stack.
 /// Each call costs a bounded number of evaluator recursion levels, so this
 /// stays safely below [`MAX_EVAL_DEPTH`].
 const MAX_CALL_DEPTH: usize = 128;
+
+/// A built-in callable supplied by the UCL prelude.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BuiltinFunction {
+    /// Returns the number of Unicode scalar values in a string.
+    Len,
+}
+
+impl BuiltinFunction {
+    /// Returns the source-level name used to look up this built-in.
+    fn name(self) -> &'static str {
+        match self {
+            Self::Len => "len",
+        }
+    }
+}
 
 /// A runtime value produced by evaluating a program.
 #[derive(Clone, Debug, PartialEq)]
@@ -72,6 +95,8 @@ pub enum Value {
     Str(String),
     /// A named UCL function that can be called with positional arguments.
     Function(FunctionValue),
+    /// A callable supplied by the built-in prelude.
+    Builtin(BuiltinFunction),
 }
 
 /// A callable UCL function value.
@@ -112,7 +137,7 @@ impl Value {
             Value::Integer(_) => "integer",
             Value::Boolean(_) => "boolean",
             Value::Str(_) => "string",
-            Value::Function(_) => "function",
+            Value::Function(_) | Value::Builtin(_) => "function",
         }
     }
 }
@@ -127,8 +152,12 @@ impl Value {
 /// front ends such as a REPL keep one environment alive across evaluations so
 /// bindings survive between inputs.
 pub struct Environment {
-    /// The stack of scopes, with the innermost (most recent) scope at the end.
+    /// The stack of user scopes, with the innermost (most recent) scope at the
+    /// end. The first scope is the mutable program global scope.
     scopes: Vec<HashMap<String, Value>>,
+    /// Read-only built-ins consulted after every user scope. A user declaration
+    /// may shadow a built-in, but assignment never mutates the prelude.
+    builtins: HashMap<String, Value>,
     /// Module loading bookkeeping: what has been evaluated and what is
     /// currently in progress. Owned logic lives in [`crate::module`].
     pub(crate) modules: ModuleState,
@@ -139,6 +168,10 @@ impl Environment {
     pub fn new() -> Self {
         Self {
             scopes: vec![HashMap::new()],
+            builtins: HashMap::from([(
+                BuiltinFunction::Len.name().to_owned(),
+                Value::Builtin(BuiltinFunction::Len),
+            )]),
             modules: ModuleState::default(),
         }
     }
@@ -197,7 +230,11 @@ impl Environment {
     ///
     /// Returns the first binding found, or `None` if no binding exists.
     fn lookup(&self, name: &str) -> Option<&Value> {
-        self.scopes.iter().rev().find_map(|scope| scope.get(name))
+        self.scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(name))
+            .or_else(|| self.builtins.get(name))
     }
 
     /// Snapshots the non-global bindings visible from innermost to outermost
@@ -274,6 +311,11 @@ impl Default for Environment {
 pub struct Evaluator {
     /// Number of UCL calls currently active during evaluation.
     call_depth: Cell<usize>,
+    /// Whether evaluation has exhausted a deterministic resource limit.
+    ///
+    /// Once set, remaining work in the current evaluation is skipped so one
+    /// resource error cannot cascade into unrelated type errors or more work.
+    resource_exhausted: Cell<bool>,
     /// A `return` statement executed by the innermost active call, waiting
     /// to be consumed at that call's boundary.
     pending_return: RefCell<Option<Value>>,
@@ -283,10 +325,11 @@ impl Evaluator {
     /// Creates a new evaluator instance.
     ///
     /// The evaluator may be reused to evaluate multiple ASTs; each evaluation
-    /// resets its active function-call counter and any pending return.
+    /// resets its active function-call counter, resource state, and any pending return.
     pub fn new() -> Self {
         Self {
             call_depth: Cell::new(0),
+            resource_exhausted: Cell::new(false),
             pending_return: RefCell::new(None),
         }
     }
@@ -344,6 +387,7 @@ impl Evaluator {
         sink: &mut DiagnosticSink,
     ) -> Option<Value> {
         self.call_depth.set(0);
+        self.resource_exhausted.set(false);
         self.pending_return.borrow_mut().take();
         let baseline = sink.len();
         let value = self.eval(root, source, environment, sink, 0);
@@ -375,6 +419,9 @@ impl Evaluator {
         sink: &mut DiagnosticSink,
         depth: usize,
     ) -> Value {
+        if self.resource_exhausted.get() || sink.is_full() {
+            return Value::Unit;
+        }
         if depth >= MAX_EVAL_DEPTH {
             sink.emit(Diagnostic::error("evaluation nesting is too deep").at(node.span));
             return Value::Unit;
@@ -385,7 +432,10 @@ impl Evaluator {
                 let mut last = Value::Unit;
                 for statement in statements {
                     last = self.eval(statement, source, environment, sink, depth + 1);
-                    if self.pending_return.borrow().is_some() {
+                    if self.pending_return.borrow().is_some()
+                        || self.resource_exhausted.get()
+                        || sink.is_full()
+                    {
                         break;
                     }
                 }
@@ -396,7 +446,10 @@ impl Evaluator {
                 let mut last = Value::Unit;
                 for statement in statements {
                     last = self.eval(statement, source, environment, sink, depth + 1);
-                    if self.pending_return.borrow().is_some() {
+                    if self.pending_return.borrow().is_some()
+                        || self.resource_exhausted.get()
+                        || sink.is_full()
+                    {
                         break;
                     }
                 }
@@ -465,7 +518,12 @@ impl Evaluator {
                         return Value::Unit;
                     }
                 };
-                Value::Str(unescape_string(text))
+                let value = unescape_string(text);
+                if self.check_string_size(value.len(), node.span, sink) {
+                    Value::Str(value)
+                } else {
+                    Value::Unit
+                }
             }
             AstKind::Group { expression } => {
                 self.eval(expression, source, environment, sink, depth + 1)
@@ -608,54 +666,61 @@ impl Evaluator {
                     values.push(self.eval(argument, source, environment, sink, depth + 1));
                 }
 
-                let Value::Function(function) = callable else {
-                    sink.emit(
-                        Diagnostic::error(format!(
-                            "cannot call value of type `{}`",
-                            callable.type_name()
-                        ))
-                        .at(callee.span),
-                    );
-                    return Value::Unit;
-                };
-                if function.parameters.len() != values.len() {
-                    sink.emit(
-                        Diagnostic::error(format!(
-                            "function expected {} argument(s), received {}",
-                            function.parameters.len(),
-                            values.len()
-                        ))
-                        .at(node.span),
-                    );
-                    return Value::Unit;
-                }
-                let call_depth = self.call_depth.get();
-                if call_depth >= MAX_CALL_DEPTH {
-                    sink.emit(Diagnostic::error("function call depth is too deep").at(node.span));
-                    return Value::Unit;
-                }
+                match callable {
+                    Value::Builtin(builtin) => self.eval_builtin(builtin, &values, node.span, sink),
+                    Value::Function(function) => {
+                        if function.parameters.len() != values.len() {
+                            sink.emit(
+                                Diagnostic::error(format!(
+                                    "function expected {} argument(s), received {}",
+                                    function.parameters.len(),
+                                    values.len()
+                                ))
+                                .at(node.span),
+                            );
+                            return Value::Unit;
+                        }
+                        let call_depth = self.call_depth.get();
+                        if call_depth >= MAX_CALL_DEPTH {
+                            sink.emit(
+                                Diagnostic::error("function call depth is too deep").at(node.span),
+                            );
+                            return Value::Unit;
+                        }
 
-                self.call_depth.set(call_depth + 1);
-                let caller_scopes = environment.begin_call(&function.captured);
-                for (parameter, value) in function.parameters.iter().zip(values) {
-                    environment.define(parameter, value);
+                        self.call_depth.set(call_depth + 1);
+                        let caller_scopes = environment.begin_call(&function.captured);
+                        for (parameter, value) in function.parameters.iter().zip(values) {
+                            environment.define(parameter, value);
+                        }
+                        // The body is evaluated against the source the function was
+                        // defined in, not the caller's; spans inside the body point
+                        // there.
+                        let value = self.eval(
+                            &function.body,
+                            &function.source,
+                            environment,
+                            sink,
+                            depth + 1,
+                        );
+                        environment.end_call(caller_scopes);
+                        // Consume whatever `return` statement the body executed; an
+                        // implicit return falls back to the body's last value.
+                        let value = self.pending_return.borrow_mut().take().unwrap_or(value);
+                        self.call_depth.set(call_depth);
+                        value
+                    }
+                    other => {
+                        sink.emit(
+                            Diagnostic::error(format!(
+                                "cannot call value of type `{}`",
+                                other.type_name()
+                            ))
+                            .at(callee.span),
+                        );
+                        Value::Unit
+                    }
                 }
-                // The body is evaluated against the source the function was
-                // defined in, not the caller's; spans inside the body point
-                // there.
-                let value = self.eval(
-                    &function.body,
-                    &function.source,
-                    environment,
-                    sink,
-                    depth + 1,
-                );
-                environment.end_call(caller_scopes);
-                // Consume whatever `return` statement the body executed; an
-                // implicit return falls back to the body's last value.
-                let value = self.pending_return.borrow_mut().take().unwrap_or(value);
-                self.call_depth.set(call_depth);
-                value
             }
             AstKind::While { condition, body } => {
                 let mut iterations = 0u64;
@@ -673,7 +738,10 @@ impl Evaluator {
                     match condition_value {
                         Value::Boolean(true) => {
                             self.eval(body, source, environment, sink, depth + 1);
-                            if self.pending_return.borrow().is_some() {
+                            if self.pending_return.borrow().is_some()
+                                || self.resource_exhausted.get()
+                                || sink.is_full()
+                            {
                                 break;
                             }
                         }
@@ -731,6 +799,43 @@ impl Evaluator {
         }
     }
 
+    /// Evaluates a callable from the built-in prelude.
+    fn eval_builtin(
+        &self,
+        builtin: BuiltinFunction,
+        values: &[Value],
+        span: Span,
+        sink: &mut DiagnosticSink,
+    ) -> Value {
+        match builtin {
+            BuiltinFunction::Len => {
+                if values.len() != 1 {
+                    sink.emit(
+                        Diagnostic::error(format!(
+                            "`len` expected 1 argument, received {}",
+                            values.len()
+                        ))
+                        .at(span),
+                    );
+                    return Value::Unit;
+                }
+                match &values[0] {
+                    Value::Str(value) => Value::Integer(value.chars().count() as i64),
+                    other => {
+                        sink.emit(
+                            Diagnostic::error(format!(
+                                "`len` expects a string argument, found `{}`",
+                                other.type_name()
+                            ))
+                            .at(span),
+                        );
+                        Value::Unit
+                    }
+                }
+            }
+        }
+    }
+
     fn eval_unary(
         &self,
         operator: char,
@@ -767,7 +872,12 @@ impl Evaluator {
                         None => overflow(span, sink),
                     },
                     (Value::Str(a), Value::Str(b)) => {
-                        let mut concatenated = a;
+                        let length = a.len().saturating_add(b.len());
+                        if !self.check_string_size(length, span, sink) {
+                            return Value::Unit;
+                        }
+                        let mut concatenated = String::with_capacity(length);
+                        concatenated.push_str(&a);
                         concatenated.push_str(&b);
                         Value::Str(concatenated)
                     }
@@ -871,6 +981,22 @@ impl Evaluator {
                 Value::Boolean(if operator == And { a && b } else { a || b })
             }
         }
+    }
+
+    /// Returns whether a string with `length` UTF-8 bytes is within the
+    /// evaluator's deterministic string-value limit.
+    fn check_string_size(&self, length: usize, span: Span, sink: &mut DiagnosticSink) -> bool {
+        if length <= MAX_STRING_BYTES {
+            return true;
+        }
+        self.resource_exhausted.set(true);
+        sink.emit(
+            Diagnostic::error(format!(
+                "string value exceeds the maximum size of {MAX_STRING_BYTES} bytes"
+            ))
+            .at(span),
+        );
+        false
     }
 }
 
@@ -1403,6 +1529,51 @@ mod tests {
         let (value, sink) = eval("\"hello\" + \" \" + \"world\";");
         assert!(!sink.has_errors());
         assert_eq!(value, Some(Value::Str("hello world".to_owned())));
+    }
+
+    #[test]
+    fn rejects_string_growth_before_host_memory_is_exhausted() {
+        // Doubling 24 times attempts to create a 16 MiB value. The evaluator
+        // must reject that deterministically at its 8 MiB value limit instead
+        // of allowing concatenation to grow until the host runs out of memory.
+        let (value, sink) = eval(
+            "let text = \"x\"; let i = 0; while i < 24 { text = text + text; i = i + 1; }; text;",
+        );
+        assert_eq!(value, None);
+        assert!(sink.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("string value exceeds the maximum size")
+        }));
+    }
+
+    #[test]
+    fn evaluates_len_for_unicode_strings() {
+        for (source, expected) in [("len(\"\");", 0), ("len(\"hé\");", 2)] {
+            let (value, sink) = eval(source);
+            assert!(!sink.has_errors(), "unexpected error for `{source}`");
+            assert_eq!(value, Some(Value::Integer(expected)), "for `{source}`");
+        }
+    }
+
+    #[test]
+    fn reports_len_arity_and_type_errors() {
+        for source in ["len();", "len(\"a\", \"b\");", "len(1);"] {
+            let (value, sink) = eval(source);
+            assert_eq!(value, None, "expected an error for `{source}");
+            assert!(
+                sink.iter()
+                    .any(|diagnostic| diagnostic.message.contains("`len`")),
+                "expected a len-specific error for `{source}`"
+            );
+        }
+    }
+
+    #[test]
+    fn user_bindings_may_shadow_len() {
+        let (value, sink) = eval("let len = fn(value) { value + 1; }; len(41);");
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Integer(42)));
     }
 
     #[test]

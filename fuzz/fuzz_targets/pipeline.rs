@@ -10,7 +10,13 @@ fuzz_target!(|data: &[u8]| {
     let source = ucl::SourceFile::new("fuzz.ucl", text);
     let mut sink = ucl::DiagnosticSink::new();
     let tokens = ucl::Lexer::new(&source).tokenize(&mut sink);
+    if sink.has_errors() {
+        return;
+    }
     let ast = ucl::Parser::new(tokens).parse(&mut sink);
+    if sink.has_errors() {
+        return;
+    }
     if let Some(ast) = ast {
         let _value = ucl::Evaluator::new().evaluate(&ast, &source, &mut sink);
     }

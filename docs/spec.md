@@ -1,6 +1,6 @@
 # Universal Coding Language (UCL) — Language Specification
 
-> **Status:** stable as of version 1.0. This document specifies the language
+> **Status:** stable as of version 1.1.0. This document specifies the language
 > implemented by the compiler pipeline (lexer → parser → evaluator) and is
 > the normative definition of that language.
 
@@ -17,6 +17,7 @@ The current implementation is intentionally small. It provides:
 - integer, boolean, and string operators;
 - `let` declarations, assignment, blocks, and lexical scoping;
 - named functions with positional parameters, calls, and recursion;
+- a built-in prelude with Unicode-aware `len(string)`;
 - conditional expressions (`if`/`else`) and `while` loops;
 - structured diagnostics with source excerpts.
 
@@ -124,6 +125,10 @@ UCL is **dynamically typed**. Values carry runtime types and operators
 validate their operands when evaluated; UCL performs no static type checking,
 type annotations, or inference.
 
+UCL also provides a small built-in prelude. Its bindings resolve after every
+user scope, so a declaration in any user scope may shadow a built-in without
+mutating the prelude. Built-in names are ordinary identifiers, not keywords.
+
 ## 4. Expressions
 
 ```
@@ -195,6 +200,11 @@ Because every binary operator is left-associative, `2 ^ 3 ^ 2` is `(2 ^ 3) ^
 `+` is overloaded by operand type: adding two integers performs checked
 addition, and adding two strings concatenates them. Mixing types is an error.
 
+Every evaluated string value is limited to **8 MiB of UTF-8 bytes**. This limit
+applies to decoded string literals and concatenation results. A construction
+that would exceed it is a runtime error; evaluation stops rather than allowing
+unbounded string growth to exhaust host memory.
+
 `&` and `|` are logical operators on booleans only, not bitwise operators on
 integers. Both *short-circuit*: `&` does not evaluate its right-hand side when
 the left-hand side is `false`, and `|` does not evaluate it when the left-hand
@@ -226,6 +236,22 @@ number of arguments must exactly equal the function's declared parameter count.
 Each parameter receives its corresponding argument value in a fresh call scope.
 A function evaluates to the value of an executed `return` statement, or the
 value of the final statement in its body when no `return` ran.
+
+### 4.3.1 Built-in functions
+
+Built-in functions are ordinary function values supplied by the prelude. Their
+names may be shadowed by `let` declarations, function declarations, parameters,
+or inner block bindings; resetting a REPL session restores the original
+prelude.
+
+`len` is currently the only built-in:
+
+| Call | Result |
+|------|--------|
+| `len(string)` | An integer equal to the number of Unicode scalar values in `string`. |
+
+For example, `len("hé")` evaluates to `2`. Calling `len` with anything other
+than exactly one string argument is a runtime error.
 
 At call time a function sees three layers of bindings: the *current* global
 scope, its own captured bindings (§4.4), and a fresh scope holding its
@@ -444,6 +470,7 @@ source span. Errors include:
   path, targeting an unreadable file, forming a circular import chain, or
   exporting a name that collides with an existing binding;
 - a loop exceeding the maximum iteration count;
+- constructing a string value larger than the 8 MiB UTF-8 byte limit;
 - a function call exceeding the maximum active-call depth (currently 128);
 - expression nesting that exceeds the parser's or evaluator's depth limit.
 
@@ -455,8 +482,11 @@ toward nesting and may be arbitrarily long. Deeper nesting is reported as an
 error.
 
 Lexical and syntactic analysis recover and continue after an error where
-possible, so a single run may report more than one diagnostic. Diagnostics are
-rendered with a source excerpt pointing at the offending span.
+possible, so a single run may report more than one diagnostic. To prevent a
+repeatedly failing program from exhausting host memory, at most 1,000
+diagnostics are retained from one pipeline run; once that limit is reached,
+evaluation stops. Diagnostics are rendered with a source excerpt pointing at
+the offending span.
 
 Each pipeline stage runs only if the previous stage completed without errors:
 a program with lexical errors is not parsed, and one with syntax errors is not

@@ -50,9 +50,12 @@ and error categories are covered by the
 [compatibility guarantees](guarantees.md). Future directions, sketched rather
 than scheduled:
 
-- Built-in functions (for example `len` for strings)
+- [x] Add the first built-in function: `len(string)` for Unicode scalar-value length
+- Additional built-in functions beyond `len`
 - Namespace member access for imports (`module.name`) alongside flat imports
 - A richer module/package story beyond local files
 - Broader platform coverage for release artifacts
 
-Each of these is additive; none would require a breaking change.
+Each of these is additive; none would require a breaking change. UCL 1.1 also
+adds a deterministic 8 MiB string-value limit to keep repeated concatenation
+from exhausting host memory.

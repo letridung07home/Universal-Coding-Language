@@ -3,7 +3,7 @@
 This document describes what the UCL project promises to keep stable across
 releases, and what may change. It applies to the language, the `ucl` command
 line interface, and the Rust library crate. These guarantees apply in full as
-of version 1.0.0.
+of version 1.1.0.
 
 ## Versioning policy
 
@@ -32,6 +32,14 @@ What is *not* guaranteed between releases:
 - New syntax or new value forms may appear in any release.
 - Programs that rely on unspecified behavior (behavior not defined in
   `docs/spec.md`) have no compatibility protection.
+- Completion of programs whose resource consumption is unbounded or exceeds a
+  documented evaluator safeguard is not guaranteed. Evaluator resource limits
+  may be introduced or tightened in a minor release to prevent host exhaustion;
+  their current values and resulting error categories are specified in
+  `docs/spec.md`.
+- A pipeline run retains at most 1,000 diagnostics. Once that cap is reached,
+  evaluation stops; the retained diagnostics remain available through the
+  library API and CLI rendering.
 
 ## Diagnostics
 
@@ -63,15 +71,17 @@ Explicitly *not* guaranteed:
 
 The crate's public items — `Lexer`, `Parser`, `Evaluator`,
 `Environment::evaluate_in` plumbing, AST types, `Value`, diagnostics, and
-source types — follow the same versioning policy as the language:
+source types — follow the same versioning policy as the language. The standard
+prelude is available in every newly created `Environment`, including one
+created after a REPL reset; user bindings may shadow its names:
 
 - Additive changes (new variants, new methods, new fields on structs that
   are not exhaustively matched by design) may appear in any minor release.
 - Removing or changing existing public signatures requires a declared
   breaking change.
-- Enum variants added to `AstKind`, `Value`, or `Keyword` make existing
-  exhaustive matches non-exhaustive from the next minor release onward;
-  downstream matchers must handle unknown cases or pin their dependency.
+- Enum variants added to `AstKind`, `Value`, `BuiltinFunction`, or `Keyword`
+  make existing exhaustive matches non-exhaustive from the next minor release
+  onward; downstream matchers must handle unknown cases or pin their dependency.
 
 ## Command line interface
 
