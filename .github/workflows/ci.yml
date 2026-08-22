@@ -48,9 +48,13 @@ jobs:
         run: cargo build --release --locked
 
   fuzz-smoke:
-    name: Fuzz smoke test
+    name: Fuzz smoke test (${{ matrix.target }})
     runs-on: ubuntu-latest
     if: github.event_name == 'schedule'
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [lexer, parser, pipeline]
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -60,18 +64,14 @@ jobs:
 
       - name: Cache build artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            fuzz
 
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
 
-      - name: Fuzz lexer (10 minutes)
-        run: cargo +nightly fuzz run lexer -- -max_total_time=600
-        working-directory: fuzz
-
-      - name: Fuzz parser (10 minutes)
-        run: cargo +nightly fuzz run parser -- -max_total_time=600
-        working-directory: fuzz
-
-      - name: Fuzz pipeline (10 minutes)
-        run: cargo +nightly fuzz run pipeline -- -max_total_time=600
+      - name: Fuzz ${{ matrix.target }} (10 minutes)
+        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=600
         working-directory: fuzz
