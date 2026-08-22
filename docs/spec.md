@@ -1,6 +1,6 @@
 # Universal Coding Language (UCL) — Language Specification
 
-> **Status:** stable as of version 1.1.0. This document specifies the language
+> **Status:** stable as of version 1.2.0. This document specifies the language
 > implemented by the compiler pipeline (lexer → parser → evaluator) and is
 > the normative definition of that language.
 
@@ -13,12 +13,14 @@ occurred).
 
 The current implementation is intentionally small. It provides:
 
-- five value types: *unit*, *integer*, *boolean*, *string*, and *function*;
+- six value types: *unit*, *integer*, *boolean*, *string*, *function*, and
+  read-only *module namespaces* created by aliased imports;
 - integer, boolean, and string operators;
 - `let` declarations, assignment, blocks, and lexical scoping;
 - named functions with positional parameters, calls, and recursion;
 - a built-in prelude with Unicode-aware `len(string)`;
 - conditional expressions (`if`/`else`) and `while` loops;
+- local-file modules with flat or read-only namespaced imports; and
 - structured diagnostics with source excerpts.
 
 ## 2. Lexical structure
@@ -381,6 +383,8 @@ an error.
 
 ```
 import ::= "use" string-literal ";"
+         | "use" string-literal "as" identifier ";"
+member-expression ::= postfix-expression "." identifier
 ```
 
 A `use` statement imports a module from another source file. It may appear
@@ -389,12 +393,26 @@ body is an error. The path is a string literal interpreted relative to the
 directory of the importing file (in an interactive session, relative to the
 process's working directory).
 
-Importing evaluates the module file exactly once per session, in an isolated
-global scope: the module cannot see or mutate the importer's bindings, and it
-resolves its own `use` statements recursively. After evaluation succeeds,
-every top-level binding of the module — including those it imported itself —
-is copied into the importing global scope. If any copied name is already
-bound there, the whole import fails with an error.
+The legacy form, `use "path.ucl";`, is a *flat import*: every top-level
+binding of the completed module — including names it imported itself — is
+copied into the importing global scope. If any copied name is already bound,
+the whole import fails without copying a partial set of exports. Repeating a
+successful flat import of the same canonical path in one session is a no-op.
+
+The alias form, `use "path.ucl" as math;`, binds one read-only module
+namespace named `math` instead of copying its exports. A member expression
+such as `math.double(21)` or `math.answer` resolves an exported value from
+that namespace. An alias must not already be globally bound. `as` is
+contextual: it is recognized only after the path in a `use` statement and
+remains a valid ordinary identifier everywhere else.
+
+Importing evaluates the module file at most once per canonical path and
+session, in an isolated global scope: the module cannot see or mutate the
+importer's bindings, and it resolves its own `use` statements recursively.
+The completed export map is cached, so flat imports and any number of aliases
+of the same path reuse the same evaluation result. A missing namespace member
+is an error, as is member access on a value other than a module. Member access
+is read-only; only identifiers are valid assignment targets.
 
 Errors during loading are reported anchored at the `use` site: unreadable
 files, syntax errors inside the module, and circular import chains all abort

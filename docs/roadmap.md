@@ -52,10 +52,12 @@ than scheduled:
 
 - [x] Add the first built-in function: `len(string)` for Unicode scalar-value length
 - Additional built-in functions beyond `len`
-- Namespace member access for imports (`module.name`) alongside flat imports
+- [x] Add namespaced imports (`use "path" as module;`) and member access
+      (`module.name`) alongside legacy flat imports
 - A richer module/package story beyond local files
 - Broader platform coverage for release artifacts
 
-Each of these is additive; none would require a breaking change. UCL 1.1 also
-adds a deterministic 8 MiB string-value limit to keep repeated concatenation
-from exhausting host memory.
+Each of these is additive; none would require a breaking change. UCL 1.1 adds
+a deterministic 8 MiB string-value limit to keep repeated concatenation from
+exhausting host memory. UCL 1.2 adds read-only namespace aliases backed by a
+per-session completed-export cache, keeping existing flat imports intact.

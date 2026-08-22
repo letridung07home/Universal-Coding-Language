@@ -32,6 +32,10 @@ pub enum Keyword {
 /// language specification is written.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TokenKind {
+    /// The contextual `as` token, recognized only after `use "path"`.
+    ///
+    /// Outside that import position, `as` remains an ordinary identifier.
+    ImportAs,
     /// An identifier: `foo`, `answer`, etc.
     ///
     /// Keywords such as `let` are produced as [`TokenKind::Keyword`] rather
@@ -81,6 +85,16 @@ pub struct Lexer<'src> {
     source: &'src SourceFile,
 }
 
+/// Tracks the small amount of lexical context needed to recognize the
+/// import-only `as` token without reserving it globally.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ImportContext {
+    None,
+    AwaitPath,
+    AwaitAs,
+    AwaitAlias,
+}
+
 impl<'src> Lexer<'src> {
     /// Creates a lexer over the given source file.
     pub fn new(source: &'src SourceFile) -> Self {
@@ -97,6 +111,7 @@ impl<'src> Lexer<'src> {
         let contents = self.source.contents();
         let bytes = contents.as_bytes();
         let mut tokens = Vec::new();
+        let mut import_context = ImportContext::None;
         let mut pos = 0;
 
         while pos < bytes.len() {
@@ -156,7 +171,8 @@ impl<'src> Lexer<'src> {
                 {
                     pos += 1;
                 }
-                let kind = match &contents[start..pos] {
+                let text = &contents[start..pos];
+                let mut kind = match text {
                     "let" => TokenKind::Keyword(Keyword::Let),
                     "true" => TokenKind::Keyword(Keyword::True),
                     "false" => TokenKind::Keyword(Keyword::False),
@@ -168,10 +184,22 @@ impl<'src> Lexer<'src> {
                     "use" => TokenKind::Keyword(Keyword::Use),
                     _ => TokenKind::Ident,
                 };
+                if import_context == ImportContext::AwaitAs && text == "as" {
+                    kind = TokenKind::ImportAs;
+                    import_context = ImportContext::AwaitAlias;
+                }
                 tokens.push(Token {
                     kind,
                     span: Span::new(start, pos),
                 });
+                match kind {
+                    TokenKind::Keyword(Keyword::Use) => import_context = ImportContext::AwaitPath,
+                    TokenKind::ImportAs => {}
+                    _ if import_context != ImportContext::None => {
+                        import_context = ImportContext::None;
+                    }
+                    _ => {}
+                }
                 continue;
             }
 
@@ -186,6 +214,9 @@ impl<'src> Lexer<'src> {
                     kind: TokenKind::Integer,
                     span: Span::new(start, pos),
                 });
+                if import_context != ImportContext::None {
+                    import_context = ImportContext::None;
+                }
                 continue;
             }
 
@@ -240,6 +271,11 @@ impl<'src> Lexer<'src> {
                     kind: TokenKind::StringLiteral,
                     span: Span::new(start, pos),
                 });
+                if import_context == ImportContext::AwaitPath {
+                    import_context = ImportContext::AwaitAs;
+                } else if import_context != ImportContext::None {
+                    import_context = ImportContext::None;
+                }
                 continue;
             }
 
@@ -273,6 +309,9 @@ impl<'src> Lexer<'src> {
                     kind,
                     span: Span::new(start, pos),
                 });
+                if import_context != ImportContext::None {
+                    import_context = ImportContext::None;
+                }
                 continue;
             }
 
@@ -746,5 +785,31 @@ mod tests {
         assert_eq!(unescape_string("\"\""), "");
         // Unknown escapes are left as-is; the lexer reports them separately.
         assert_eq!(unescape_string("\"a\\xb\""), "a\\xb");
+    }
+
+    #[test]
+    fn recognizes_as_only_after_an_import_path() {
+        let source = SourceFile::new("main.ucl", "let as = 1; use \"math.ucl\" as math; as;");
+        let tokens = Lexer::new(&source).tokenize(&mut DiagnosticSink::new());
+        let kinds: Vec<TokenKind> = tokens.iter().map(|token| token.kind).collect();
+
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::Keyword(Keyword::Let),
+                TokenKind::Ident,
+                TokenKind::Punctuation('='),
+                TokenKind::Integer,
+                TokenKind::Punctuation(';'),
+                TokenKind::Keyword(Keyword::Use),
+                TokenKind::StringLiteral,
+                TokenKind::ImportAs,
+                TokenKind::Ident,
+                TokenKind::Punctuation(';'),
+                TokenKind::Ident,
+                TokenKind::Punctuation(';'),
+                TokenKind::Eof,
+            ]
+        );
     }
 }

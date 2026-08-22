@@ -24,7 +24,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::diagnostic::{Diagnostic, DiagnosticSink, Severity};
 use crate::lexer::unescape_string;
@@ -79,6 +79,33 @@ impl BuiltinFunction {
     }
 }
 
+/// A read-only collection of exported module bindings.
+///
+/// Namespace members are created by `use "path" as alias;` and are resolved
+/// with `alias.member` expressions. The export map is kept private so UCL code
+/// cannot mutate a module namespace after it has been evaluated.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModuleValue {
+    exports: BTreeMap<String, Value>,
+}
+
+impl ModuleValue {
+    /// Creates a module namespace from its completed top-level exports.
+    pub(crate) fn new(exports: BTreeMap<String, Value>) -> Self {
+        Self { exports }
+    }
+
+    /// Looks up an exported binding by name.
+    pub(crate) fn get(&self, name: &str) -> Option<&Value> {
+        self.exports.get(name)
+    }
+
+    /// Iterates over the namespace's exported bindings in deterministic order.
+    pub(crate) fn exports(&self) -> impl Iterator<Item = (&String, &Value)> {
+        self.exports.iter()
+    }
+}
+
 /// A runtime value produced by evaluating a program.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
@@ -97,6 +124,8 @@ pub enum Value {
     Function(FunctionValue),
     /// A callable supplied by the built-in prelude.
     Builtin(BuiltinFunction),
+    /// A read-only namespace produced by an aliased module import.
+    Module(ModuleValue),
 }
 
 /// A callable UCL function value.
@@ -138,6 +167,7 @@ impl Value {
             Value::Boolean(_) => "boolean",
             Value::Str(_) => "string",
             Value::Function(_) | Value::Builtin(_) => "function",
+            Value::Module(_) => "module",
         }
     }
 }
@@ -203,6 +233,11 @@ impl Environment {
         }
         global.insert(name, value);
         true
+    }
+
+    /// Returns whether `name` is already bound in the program global scope.
+    pub(crate) fn has_global(&self, name: &str) -> bool {
+        self.scopes[0].contains_key(name)
     }
 
     /// Pushes a new, empty scope onto the stack.
@@ -484,6 +519,38 @@ impl Evaluator {
                     None => {
                         sink.emit(
                             Diagnostic::error(format!("undefined variable `{name}`")).at(node.span),
+                        );
+                        Value::Unit
+                    }
+                }
+            }
+            AstKind::Member { object, member } => {
+                let object = self.eval(object, source, environment, sink, depth + 1);
+                let member_span = *member;
+                let Some(member) = source.slice(member_span) else {
+                    sink.emit(Diagnostic::error("invalid module member span").at(node.span));
+                    return Value::Unit;
+                };
+                match object {
+                    Value::Module(module) => match module.get(member) {
+                        Some(value) => value.clone(),
+                        None => {
+                            sink.emit(
+                                Diagnostic::error(format!(
+                                    "module has no exported member `{member}`"
+                                ))
+                                .at(member_span),
+                            );
+                            Value::Unit
+                        }
+                    },
+                    other => {
+                        sink.emit(
+                            Diagnostic::error(format!(
+                                "cannot access member `{member}` on value of type `{}`",
+                                other.type_name()
+                            ))
+                            .at(node.span),
                         );
                         Value::Unit
                     }
@@ -795,7 +862,9 @@ impl Evaluator {
                 *self.pending_return.borrow_mut() = Some(returned.clone());
                 returned
             }
-            AstKind::Use { path, .. } => self.eval_use(path, source, environment, sink, depth),
+            AstKind::Use { path, alias, .. } => {
+                self.eval_use(path, alias, source, environment, sink, depth)
+            }
         }
     }
 
