@@ -255,4 +255,22 @@ mod tests {
             "note: additional context\n"
         );
     }
+
+    #[test]
+    fn counts_columns_in_characters_not_bytes() {
+        // `é` is two bytes but one character, so the `0` on line 2 sits at
+        // character column 8, not at its byte offset within the line.
+        let source = SourceFile::new("main.ucl", "let café = 5;\ncafé / 0;");
+        let zero = source.contents().rfind('0').expect("source contains a `0`");
+        let diagnostic = Diagnostic::new(
+            Severity::Error,
+            Some(Span::new(zero, zero + 1)),
+            "division by zero",
+        );
+
+        let rendered = format_diagnostic(&diagnostic, &source);
+
+        assert!(rendered.contains("  --> main.ucl:2:8"), "got: {rendered}");
+        assert!(rendered.contains("  2 | café / 0;"), "got: {rendered}");
+    }
 }

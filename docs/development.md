@@ -44,6 +44,35 @@ source text -> lexer -> parser -> evaluator
 - `evaluator.rs` executes the abstract syntax tree.
 - `main.rs` provides the `ucl` command-line interface and diagnostic rendering.
 
+## Property testing and fuzzing
+
+In addition to the unit and integration tests, the repository ships
+dependency-free property tests in `tests/property.rs`. They use a deterministic
+pseudo-random generator, so a failure can be reproduced exactly:
+
+```sh
+cargo test --test property
+```
+
+The property tests assert that the pipeline never panics on arbitrary input,
+that the lexer always emits a trailing `Eof` token and valid spans, and that
+integer arithmetic and operator precedence agree with Rust's own checked
+arithmetic and the language specification.
+
+Fuzz targets for the lexer, parser, and full pipeline live in `fuzz/` and use
+[`cargo-fuzz`](https://github.com/rust-fuzz/cargo-fuzz), which requires the
+nightly toolchain and the `cargo-fuzz` subcommand:
+
+```sh
+cargo install cargo-fuzz
+cargo +nightly fuzz run lexer
+cargo +nightly fuzz run parser
+cargo +nightly fuzz run pipeline
+```
+
+`fuzz/` is a standalone crate and is not built by the normal `cargo build`,
+`cargo test`, or `cargo clippy` invocations at the repository root.
+
 ## Contributing
 
 Bug reports and focused pull requests are welcome.

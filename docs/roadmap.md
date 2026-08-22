@@ -11,7 +11,7 @@ concrete implementation work should be tracked in issues as it is scheduled.
 - [ ] Stop evaluation when lexing or parsing reports errors
 - [ ] Make evaluator failures explicit rather than representing them as `unit`
 - [ ] Validate source spans and prevent invalid public spans from panicking
-- [ ] Add regression tests for overflow, malformed syntax, UTF-8 diagnostics,
+- [x] Add regression tests for overflow, malformed syntax, UTF-8 diagnostics,
       nested scopes, and CLI argument handling
 - [x] Add parser and evaluator nesting limits
 
@@ -26,7 +26,7 @@ concrete implementation work should be tracked in issues as it is scheduled.
 
 ## Tooling and ecosystem
 
-- [ ] Add property tests and fuzz targets for the lexer and parser
+- [x] Add property tests and fuzz targets for the lexer and parser
 - [ ] Publish diagnostic and compatibility guarantees
 - [ ] Design a module and package system
 - [ ] Add an interactive REPL

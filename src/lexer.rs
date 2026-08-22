@@ -338,4 +338,16 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn skips_non_ascii_content_inside_comments() {
+        let source = SourceFile::new("main.ucl", "// café comment\n42");
+        let mut sink = DiagnosticSink::new();
+        let tokens = Lexer::new(&source).tokenize(&mut sink);
+
+        assert!(!sink.has_errors());
+        let kinds: Vec<TokenKind> = tokens.iter().map(|token| token.kind).collect();
+        assert_eq!(kinds, vec![TokenKind::Integer, TokenKind::Eof]);
+        assert_eq!(lexeme(&source, &tokens[0]), "42");
+    }
 }
