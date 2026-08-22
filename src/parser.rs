@@ -112,6 +112,24 @@ pub enum AstKind {
         /// The block evaluated once per iteration.
         body: Box<AstNode>,
     },
+    /// A named function declaration: `fn name(parameters) { ... }`.
+    Function {
+        /// Span of the declaration keyword.
+        keyword: Span,
+        /// Span of the declared function name.
+        name: Span,
+        /// Spans of the parameter names in source order.
+        parameters: Vec<Span>,
+        /// The function body.
+        body: Box<AstNode>,
+    },
+    /// A function call: `callee(argument, ...)`.
+    Call {
+        /// The expression that evaluates to the callable function.
+        callee: Box<AstNode>,
+        /// Arguments in source order.
+        arguments: Vec<AstNode>,
+    },
 }
 
 /// An infix binary operator.
@@ -244,8 +262,9 @@ impl Parser {
 
     /// Parses a single statement from the token stream.
     ///
-    /// A statement can be a declaration (`let x = 5;`), an assignment (`x = 5;`),
-    /// an expression statement (`x + 5;`), or a block (`{ ... }`).
+    /// A statement can be a declaration (`let x = 5;`), a function declaration
+    /// (`fn add(left, right) { left + right; }`), an assignment (`x = 5;`), an
+    /// expression statement (`x + 5;`), or a block (`{ ... }`).
     fn parse_statement(&mut self, sink: &mut DiagnosticSink) -> Option<AstNode> {
         // `let` is a reserved keyword, so `let name = value` is recognized
         // from its keyword token rather than from the token shape.
@@ -272,6 +291,10 @@ impl Parser {
                     value: Box::new(value),
                 },
             ));
+        }
+
+        if self.check_keyword(Keyword::Function) {
+            return self.parse_function(sink);
         }
 
         // A `while` loop is a statement, not an expression: it evaluates to
@@ -357,11 +380,51 @@ impl Parser {
                     None => None,
                 }
             }
-            None => self.parse_primary(sink),
+            None => self.parse_postfix(sink),
         };
 
         self.depth -= 1;
         result
+    }
+
+    /// Parses a postfix expression, including one or more function calls.
+    ///
+    /// Calls bind tighter than unary and infix operators, so `-f(1)` parses as
+    /// `-(f(1))` and `f(1)(2)` is a nested call expression.
+    fn parse_postfix(&mut self, sink: &mut DiagnosticSink) -> Option<AstNode> {
+        let mut callee = self.parse_primary(sink)?;
+
+        while self.consume_punctuation('(') {
+            let mut arguments = Vec::new();
+            if !self.check_punctuation(')') {
+                loop {
+                    arguments.push(self.parse_expression(0, sink)?);
+                    if self.consume_punctuation(',') {
+                        continue;
+                    }
+                    break;
+                }
+            }
+
+            let end = if self.consume_punctuation(')') {
+                self.tokens[self.cursor - 1].span.end
+            } else {
+                self.error_current("expected `)` after function arguments", sink);
+                arguments
+                    .last()
+                    .map_or(callee.span.end, |argument| argument.span.end)
+            };
+            let span = Span::new(callee.span.start, end);
+            callee = AstNode::new(
+                span,
+                AstKind::Call {
+                    callee: Box::new(callee),
+                    arguments,
+                },
+            );
+        }
+
+        Some(callee)
     }
 
     /// Parses a primary expression (the atomic elements of expressions).
@@ -465,6 +528,52 @@ impl Parser {
                 condition: Box::new(condition),
                 then_branch: Box::new(then_branch),
                 else_branch,
+            },
+        ))
+    }
+
+    /// Parses a named function declaration: `fn name(parameters) { ... }`.
+    fn parse_function(&mut self, sink: &mut DiagnosticSink) -> Option<AstNode> {
+        let keyword = self.advance().span;
+        if !self.check_kind(TokenKind::Ident) {
+            self.error_current("expected an identifier after `fn`", sink);
+            return None;
+        }
+        let name = self.advance().span;
+
+        if !self.consume_punctuation('(') {
+            self.error_current("expected `(` after the function name", sink);
+            return None;
+        }
+
+        let mut parameters = Vec::new();
+        if !self.check_punctuation(')') {
+            loop {
+                if !self.check_kind(TokenKind::Ident) {
+                    self.error_current("expected an identifier in the parameter list", sink);
+                    return None;
+                }
+                parameters.push(self.advance().span);
+                if self.consume_punctuation(',') {
+                    continue;
+                }
+                break;
+            }
+        }
+
+        if !self.consume_punctuation(')') {
+            self.error_current("expected `)` after function parameters", sink);
+            return None;
+        }
+
+        let body = self.parse_block(sink)?;
+        Some(AstNode::new(
+            Span::new(keyword.start, body.span.end),
+            AstKind::Function {
+                keyword,
+                name,
+                parameters,
+                body: Box::new(body),
             },
         ))
     }
@@ -1013,6 +1122,35 @@ mod tests {
         let (_ast, sink) = parse("1 + while x { 2; };");
 
         assert!(sink.has_errors());
+    }
+
+    #[test]
+    fn parses_function_declarations_and_chained_calls() {
+        let (ast, sink) = parse("fn add(left, right) { left + right; }; add(20, 22);");
+
+        assert!(!sink.has_errors());
+        let AstKind::Program { statements } = ast.kind else {
+            panic!("expected program");
+        };
+        assert!(matches!(
+            statements[0].kind,
+            AstKind::Function { ref parameters, .. } if parameters.len() == 2
+        ));
+        assert!(matches!(statements[1].kind, AstKind::Call { .. }));
+    }
+
+    #[test]
+    fn calls_bind_tighter_than_unary_operators() {
+        let (ast, sink) = parse("-negate(1);");
+
+        assert!(!sink.has_errors());
+        let AstKind::Program { statements } = ast.kind else {
+            panic!("expected program");
+        };
+        let AstKind::Unary { operand, .. } = &statements[0].kind else {
+            panic!("expected unary expression");
+        };
+        assert!(matches!(operand.kind, AstKind::Call { .. }));
     }
 
     #[test]

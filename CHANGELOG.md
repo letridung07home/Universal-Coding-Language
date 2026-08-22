@@ -2,6 +2,30 @@
 
 All notable changes to UCL are documented here.
 
+## 0.4.0 - 2026-08-22
+
+### Added
+
+- Named function declarations: `fn name(parameter, ...) { ... }`.
+- Positional function calls with left-to-right argument evaluation and exact
+  arity checking.
+- Implicit function return values: a function evaluates to the value of its
+  final statement, or `unit` when its body is empty.
+- Recursive global functions. Function bodies resolve their own parameters and
+  global bindings, never a caller's local bindings.
+- Diagnostics for calls to non-function values, incorrect argument counts,
+  duplicate parameters, and function declarations outside program scope.
+- A 64-active-call safety limit that reports an error instead of overflowing the
+  host stack during unbounded recursion.
+
+### Changed
+
+- **Breaking (library API):** `Value` has a new `Value::Function(FunctionValue)`
+  variant, and `AstKind` has new `Function` and `Call` variants.
+- UCL's dynamic runtime type policy is now explicitly documented; static type
+  checking, function literals, nested functions, and closures remain future
+  work.
+
 ## 0.3.0 - 2026-08-22
 
 ### Added

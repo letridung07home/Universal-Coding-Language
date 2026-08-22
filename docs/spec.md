@@ -14,9 +14,10 @@ occurred).
 
 The current implementation is intentionally small. It provides:
 
-- four value types: *unit*, *integer*, *boolean*, and *string*;
+- five value types: *unit*, *integer*, *boolean*, *string*, and *function*;
 - integer, boolean, and string operators;
 - `let` declarations, assignment, blocks, and lexical scoping;
+- named functions with positional parameters, calls, and recursion;
 - conditional expressions (`if`/`else`) and `while` loops;
 - structured diagnostics with source excerpts.
 
@@ -51,10 +52,10 @@ comment ::= "//" [^\n]*
 identifier ::= [A-Za-z_] [A-Za-z0-9_]*
 ```
 
-Identifiers name bindings. The words `let`, `true`, `false`, `if`, `else`, and
-`while` are reserved keywords: the lexer produces dedicated keyword tokens for
-them, and they cannot be used as identifiers. The parser recognizes
-declarations from the `let` keyword token rather than from the token shape.
+Identifiers name bindings. The words `let`, `fn`, `true`, `false`, `if`, `else`,
+and `while` are reserved keywords: the lexer produces dedicated keyword tokens
+for them, and they cannot be used as identifiers. The parser recognizes
+declarations from their keyword tokens rather than from token shape.
 
 ### 2.5 String literals
 
@@ -90,7 +91,7 @@ literal syntax).
 
 ### 2.8 Punctuation
 
-The characters `( ) { } ; = + - * / % ^ < > & | !` are significant. The
+The characters `( ) { } , ; = + - * / % ^ < > & | !` are significant. The
 two-character sequences `<=`, `>=`, `==`, and `!=` are tokenized as single
 operator tokens (§4.2). Any other ASCII punctuation character is tokenized as
 punctuation; one that no parser production accepts produces an error at that
@@ -110,19 +111,24 @@ error and skipped, so scanning continues after it.
 | `integer` | A signed 64-bit integer.               | `42`, `2 + 3`    |
 | `boolean` | `true` or `false`.                     | `true`, `1 < 2`  |
 | `string`  | A sequence of Unicode characters.      | `"hello"`, `"a" + "b"` |
+| `function` | A named callable with positional parameters. | `fn add(a, b) { a + b; }` |
 
-*Future work.* Functions, and the rest of the type system.
+UCL is **dynamically typed** in v0.4. Values carry runtime types and operators
+validate their operands when evaluated; UCL performs no static type checking,
+type annotations, or inference.
 
 ## 4. Expressions
 
 ```
-expression      ::= binary-expression
-binary-expression ::= unary-expression
-                    | binary-expression binary-operator unary-expression
-                    | if-expression
-unary-expression ::= prefix-operator unary-expression
-                    | primary
-primary         ::= integer-literal
+expression         ::= binary-expression
+binary-expression  ::= unary-expression
+                     | binary-expression binary-operator unary-expression
+                     | if-expression
+unary-expression   ::= prefix-operator unary-expression
+                     | postfix-expression
+postfix-expression ::= primary ("(" argument-list? ")")*
+argument-list      ::= expression ("," expression)*
+primary            ::= integer-literal
                   | boolean-literal
                   | string-literal
                   | identifier
@@ -195,7 +201,26 @@ The `-` operator remains integer-only; there is no string repetition.
 
 Applying a binary operator to operands of the wrong type is an error.
 
-### 4.3 Conditional expressions
+### 4.3 Function calls
+
+A call expression has the form `callee(argument, ...)`. Calls bind more tightly
+than unary and binary operators, so `-negate(2)` means `-(negate(2))`. Calls may
+be chained, although v0.4 has no function literals or function-returning
+functions, so a chained call normally reports a non-callable-value error.
+
+The callee is evaluated first. Arguments are then evaluated left-to-right before
+the function body begins. The callee must evaluate to a `function` and the
+number of arguments must exactly equal the function's declared parameter count.
+Each parameter receives its corresponding argument value in a fresh call scope.
+A function evaluates to the value of the final statement in its body, or `unit`
+when its body is empty.
+
+Function bodies resolve global bindings and their own parameters. They do not
+resolve bindings in the caller's local blocks; UCL has no dynamic scoping.
+Assignments to global bindings made by a function persist after the call. A
+function's own global name is available in its body, allowing recursion.
+
+### 4.4 Conditional expressions
 
 ```
 if-expression ::= "if" expression block ("else" (block | if-expression))?
@@ -215,7 +240,7 @@ not reported.
 if x < 0 { "negative"; } else if x == 0 { "zero"; } else { "positive"; }
 ```
 
-### 4.4 While loops
+### 4.5 While loops
 
 ```
 while-statement ::= "while" expression block
@@ -235,6 +260,7 @@ that never becomes `false` cannot hang the interpreter.
 ```
 program   ::= statement*
 statement ::= declaration
+            | function-declaration
             | assignment
             | while-statement
             | expression-statement
@@ -256,7 +282,20 @@ result in the innermost enclosing scope. The declaration itself evaluates to
 `unit`. Redeclaring a name in the same scope shadows the earlier binding; the
 earlier binding remains intact in outer scopes.
 
-### 5.2 Assignment
+### 5.2 Function declaration
+
+```
+function-declaration ::= "fn" identifier "(" parameter-list? ")" block
+parameter-list       ::= identifier ("," identifier)*
+```
+
+A function declaration may appear only in the program's outermost scope. It
+binds the declared identifier to a function value and itself evaluates to
+`unit`. Parameter names must be unique. Function declarations inside blocks or
+function bodies are runtime errors in v0.4; closures and nested functions are
+future work.
+
+### 5.3 Assignment
 
 ```
 assignment ::= identifier "=" expression
@@ -268,13 +307,13 @@ an unbound name is an error; assignment does not create a binding. The
 assignment expression evaluates to the assigned value. The left-hand side must
 be an identifier; any other target is an error.
 
-### 5.3 Expression statement
+### 5.4 Expression statement
 
 An expression may stand alone as a statement; its value is computed and then
 discarded (except that the value of a program's last statement is the
 program's result).
 
-### 5.4 Blocks and scope
+### 5.5 Blocks and scope
 
 ```
 block ::= "{" statement* "}"
@@ -318,7 +357,10 @@ source span. Errors include:
 - operators applied to operands of the wrong type, including equality
   comparisons between values of different types;
 - `if` or `while` conditions that do not produce a boolean;
+- calls to non-function values or calls with an incorrect argument count;
+- duplicate function parameters or function declarations outside program scope;
 - a loop exceeding the maximum iteration count;
+- a function call exceeding the maximum active-call depth (currently 64);
 - expression nesting that exceeds the parser's or evaluator's depth limit.
 
 The parser rejects expressions nested more than a fixed depth (currently 256

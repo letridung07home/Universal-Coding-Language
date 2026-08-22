@@ -22,7 +22,8 @@
 //! This design allows users to see all errors in their program at once,
 //! similar to how compilers like rustc operate.
 
-use std::collections::HashMap;
+use std::cell::Cell;
+use std::collections::{HashMap, HashSet};
 
 use crate::diagnostic::{Diagnostic, DiagnosticSink, Severity};
 use crate::lexer::unescape_string;
@@ -46,6 +47,11 @@ const MAX_EVAL_DEPTH: usize = 512;
 /// runaway loops; legitimate programs rarely approach it.
 const MAX_LOOP_ITERATIONS: u64 = 100_000;
 
+/// The maximum number of active UCL function calls.
+///
+/// This prevents recursive programs from exhausting the host call stack.
+const MAX_CALL_DEPTH: usize = 64;
+
 /// A runtime value produced by evaluating a program.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
@@ -60,6 +66,18 @@ pub enum Value {
     Boolean(bool),
     /// A string of Unicode text.
     Str(String),
+    /// A named UCL function that can be called with positional arguments.
+    Function(FunctionValue),
+}
+
+/// A callable UCL function value.
+///
+/// Functions declared by v0.4 execute with the global scope and a fresh
+/// parameter scope, so calls are not dynamically scoped through their callers.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FunctionValue {
+    parameters: Vec<String>,
+    body: AstNode,
 }
 
 impl Value {
@@ -70,6 +88,7 @@ impl Value {
             Value::Integer(_) => "integer",
             Value::Boolean(_) => "boolean",
             Value::Str(_) => "string",
+            Value::Function(_) => "function",
         }
     }
 }
@@ -116,6 +135,29 @@ impl Environment {
         self.scopes.iter().rev().find_map(|scope| scope.get(name))
     }
 
+    /// Returns whether evaluation is currently in the program's global scope.
+    fn is_global(&self) -> bool {
+        self.scopes.len() == 1
+    }
+
+    /// Begins a function call with the global scope and a fresh parameter
+    /// scope, returning the caller's scopes for restoration when it finishes.
+    fn begin_call(&mut self) -> Vec<HashMap<String, Value>> {
+        let mut caller_scopes = std::mem::take(&mut self.scopes);
+        let global = caller_scopes.remove(0);
+        self.scopes.push(global);
+        self.push_scope();
+        caller_scopes
+    }
+
+    /// Restores caller scopes after a function call while preserving changes
+    /// the function made to global bindings.
+    fn end_call(&mut self, mut caller_scopes: Vec<HashMap<String, Value>>) {
+        let global = self.scopes.remove(0);
+        caller_scopes.insert(0, global);
+        self.scopes = caller_scopes;
+    }
+
     /// Reassigns an existing binding. Returns `false` if `name` is unbound.
     ///
     /// The assignment searches scopes from innermost to outermost and updates
@@ -136,15 +178,20 @@ impl Environment {
 ///
 /// The evaluator implements the semantic rules of the UCL language,
 /// executing the abstract syntax tree to produce runtime values.
-pub struct Evaluator;
+pub struct Evaluator {
+    /// Number of UCL calls currently active during evaluation.
+    call_depth: Cell<usize>,
+}
 
 impl Evaluator {
     /// Creates a new evaluator instance.
     ///
-    /// The evaluator is stateless, so a single instance can be reused
-    /// to evaluate multiple ASTs.
+    /// The evaluator may be reused to evaluate multiple ASTs; each evaluation
+    /// resets its active function-call counter.
     pub fn new() -> Self {
-        Self
+        Self {
+            call_depth: Cell::new(0),
+        }
     }
 
     /// Evaluates the given AST to produce a value.
@@ -180,6 +227,7 @@ impl Evaluator {
     ) -> Option<Value> {
         let mut environment = Environment::default();
         environment.push_scope();
+        self.call_depth.set(0);
         let baseline = sink.len();
         let value = self.eval(root, source, &mut environment, sink, 0);
         let failed = sink
@@ -364,6 +412,104 @@ impl Evaluator {
                         Value::Unit
                     }
                 }
+            }
+            AstKind::Function {
+                name,
+                parameters,
+                body,
+                ..
+            } => {
+                if !environment.is_global() {
+                    sink.emit(
+                        Diagnostic::error(
+                            "function declarations are only allowed at program scope",
+                        )
+                        .at(node.span),
+                    );
+                    return Value::Unit;
+                }
+
+                let Some(name) = source.slice(*name) else {
+                    sink.emit(
+                        Diagnostic::error("function declaration has an invalid name span")
+                            .at(node.span),
+                    );
+                    return Value::Unit;
+                };
+                let mut names = Vec::with_capacity(parameters.len());
+                let mut seen = HashSet::new();
+                for parameter_span in parameters {
+                    let Some(parameter) = source.slice(*parameter_span) else {
+                        sink.emit(
+                            Diagnostic::error("function declaration has an invalid parameter span")
+                                .at(node.span),
+                        );
+                        return Value::Unit;
+                    };
+                    if !seen.insert(parameter) {
+                        sink.emit(
+                            Diagnostic::error(format!(
+                                "duplicate function parameter `{parameter}`"
+                            ))
+                            .at(*parameter_span),
+                        );
+                        return Value::Unit;
+                    }
+                    names.push(parameter.to_owned());
+                }
+
+                environment.define(
+                    name,
+                    Value::Function(FunctionValue {
+                        parameters: names,
+                        body: (**body).clone(),
+                    }),
+                );
+                Value::Unit
+            }
+            AstKind::Call { callee, arguments } => {
+                let callable = self.eval(callee, source, environment, sink, depth + 1);
+                let mut values = Vec::with_capacity(arguments.len());
+                for argument in arguments {
+                    values.push(self.eval(argument, source, environment, sink, depth + 1));
+                }
+
+                let Value::Function(function) = callable else {
+                    sink.emit(
+                        Diagnostic::error(format!(
+                            "cannot call value of type `{}`",
+                            callable.type_name()
+                        ))
+                        .at(callee.span),
+                    );
+                    return Value::Unit;
+                };
+                if function.parameters.len() != values.len() {
+                    sink.emit(
+                        Diagnostic::error(format!(
+                            "function expected {} argument(s), received {}",
+                            function.parameters.len(),
+                            values.len()
+                        ))
+                        .at(node.span),
+                    );
+                    return Value::Unit;
+                }
+                let call_depth = self.call_depth.get();
+                if call_depth >= MAX_CALL_DEPTH {
+                    sink.emit(Diagnostic::error("function call depth is too deep").at(node.span));
+                    return Value::Unit;
+                }
+
+                self.call_depth.set(call_depth + 1);
+                let caller_scopes = environment.begin_call();
+                for (parameter, value) in function.parameters.iter().zip(values) {
+                    environment.define(parameter, value);
+                }
+                let value = self.eval(&function.body, source, environment, sink, depth + 1);
+                environment.end_call(caller_scopes);
+                self.call_depth.set(call_depth);
+                value
             }
             AstKind::While { condition, body } => {
                 let mut iterations = 0u64;
@@ -1220,5 +1366,78 @@ mod tests {
         let (value, sink) = eval(source);
         assert!(!sink.has_errors());
         assert_eq!(value, Some(Value::Str("hi ucl".to_owned())));
+    }
+
+    #[test]
+    fn calls_named_functions_with_parameters_and_implicit_results() {
+        let source = "fn add(left, right) { left + right; }; add(20, 22);";
+        let (value, sink) = eval(source);
+
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Integer(42)));
+    }
+
+    #[test]
+    fn functions_resolve_globals_not_caller_locals() {
+        let source = "let value = 10; fn read() { value; }; { let value = 20; read(); };";
+        let (value, sink) = eval(source);
+
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Integer(10)));
+    }
+
+    #[test]
+    fn function_calls_evaluate_arguments_left_to_right() {
+        let source = "let state = 0; fn first() { state = 1; state; }; fn second() { state = 2; state; }; fn pick(left, right) { right; }; pick(first(), second()); state;";
+        let (value, sink) = eval(source);
+
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Integer(2)));
+    }
+
+    #[test]
+    fn functions_can_recur() {
+        let source =
+            "fn factorial(n) { if n <= 1 { 1; } else { n * factorial(n - 1); }; }; factorial(5);";
+        let (value, sink) = eval(source);
+
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Integer(120)));
+    }
+
+    #[test]
+    fn reports_function_call_and_declaration_errors() {
+        for (source, expected) in [
+            (
+                "fn identity(value) { value; }; identity();",
+                "expected 1 argument",
+            ),
+            ("42(1);", "cannot call value of type `integer`"),
+            (
+                "fn duplicate(value, value) { value; };",
+                "duplicate function parameter `value`",
+            ),
+            ("{ fn inner() { 1; }; };", "only allowed at program scope"),
+        ] {
+            let (_value, sink) = eval(source);
+            assert!(sink.has_errors(), "expected an error for `{source}`");
+            assert!(
+                sink.iter()
+                    .any(|diagnostic| diagnostic.message.contains(expected)),
+                "expected `{expected}` for `{source}`"
+            );
+        }
+    }
+
+    #[test]
+    fn caps_recursive_function_calls() {
+        let (_value, sink) = eval("fn recurse() { recurse(); }; recurse();");
+
+        assert!(sink.has_errors());
+        assert!(sink.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("function call depth is too deep")
+        }));
     }
 }

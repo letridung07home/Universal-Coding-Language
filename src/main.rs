@@ -221,6 +221,7 @@ fn print_value(value: &Value) {
         Value::Integer(integer) => println!("{integer}"),
         Value::Boolean(boolean) => println!("{boolean}"),
         Value::Str(string) => println!("{string}"),
+        Value::Function(_) => println!("<function>"),
     }
 }
 

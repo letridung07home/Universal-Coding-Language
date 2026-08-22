@@ -17,12 +17,13 @@ concrete implementation work should be tracked in issues as it is scheduled.
 
 ## Language foundation
 
-- [ ] Define keyword, assignment, operator, and runtime-error semantics
-- [ ] Decide whether UCL will be statically or dynamically typed
+- [x] Define keyword, assignment, operator, and runtime-error semantics
+- [x] Decide that UCL is dynamically typed for the current interpreter stage
 - [x] Add boolean literals and equality operators
 - [x] Add strings and string operations
 - [x] Add conditional and looping constructs
-- [ ] Add functions, parameters, return values, and closures
+- [x] Add named functions, parameters, calls, implicit return values, and recursion
+- [ ] Add function literals, nested functions, explicit `return` statements, and closures
 
 ## Tooling and ecosystem
 

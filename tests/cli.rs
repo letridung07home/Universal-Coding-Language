@@ -109,6 +109,26 @@ fn evaluates_if_else_and_while_end_to_end() {
 }
 
 #[test]
+fn evaluates_function_calls_end_to_end() {
+    let source = "fn triple(value) { value * 3; }; triple(14);";
+    let (stdout, stderr, success) = run(source);
+
+    assert!(success, "stderr: {stderr}");
+    assert_eq!(stdout, "42\n");
+    assert!(stderr.is_empty());
+}
+
+#[test]
+fn reports_function_arity_errors_with_an_excerpt() {
+    let (stdout, stderr, success) = run("fn identity(value) { value; }; identity();");
+
+    assert!(!success);
+    assert!(stdout.is_empty());
+    assert!(stderr.contains("error: function expected 1 argument(s), received 0"));
+    assert!(stderr.contains("identity();"));
+}
+
+#[test]
 fn unterminated_strings_are_reported_with_an_excerpt() {
     let (_stdout, stderr, success) = run("\"oops");
     assert!(!success);

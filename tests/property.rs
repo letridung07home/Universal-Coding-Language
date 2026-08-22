@@ -50,7 +50,7 @@ impl Rng {
 }
 
 /// Characters likely to exercise interesting lexer and parser paths.
-const ALPHABET: &str = "abcxyzlet012379+-*/%^<>&|!=;(){} \t\néπ🙂\"\\ifewhls";
+const ALPHABET: &str = "abcxyzletrfn012379+-*/%^<>&|!=;,(){} \t\néπ🙂\"\\ifewhls";
 
 /// Generates a random string up to 64 characters long.
 fn random_string(rng: &mut Rng) -> String {
@@ -281,6 +281,26 @@ fn if_expressions_select_the_matching_branch() {
         assert_eq!(
             value,
             Value::Integer(a.min(b)),
+            "mismatch for `{source_text}`"
+        );
+    }
+}
+
+#[test]
+fn functions_apply_parameters_exactly() {
+    let mut rng = Rng::new(0xF00D_1234_5678_9ABC);
+
+    for _ in 0..500 {
+        let left = rng.range(-10_000, 10_000);
+        let right = rng.range(-10_000, 10_000);
+        let source_text =
+            format!("fn combine(left, right) {{ left * 3 + right; }}; combine({left}, {right});");
+        let (value, had_errors) = eval_expression(&source_text);
+
+        assert!(!had_errors, "unexpected error for `{source_text}`");
+        assert_eq!(
+            value,
+            Value::Integer(left * 3 + right),
             "mismatch for `{source_text}`"
         );
     }

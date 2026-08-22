@@ -18,6 +18,8 @@ pub enum Keyword {
     Else,
     /// The `while` loop keyword.
     While,
+    /// The `fn` function-declaration keyword.
+    Function,
 }
 
 /// The kind of a lexical token.
@@ -127,6 +129,7 @@ impl<'src> Lexer<'src> {
                     "if" => TokenKind::Keyword(Keyword::If),
                     "else" => TokenKind::Keyword(Keyword::Else),
                     "while" => TokenKind::Keyword(Keyword::While),
+                    "fn" => TokenKind::Keyword(Keyword::Function),
                     _ => TokenKind::Ident,
                 };
                 tokens.push(Token {
@@ -537,8 +540,8 @@ mod tests {
     }
 
     #[test]
-    fn recognizes_if_else_and_while_as_keywords() {
-        let source = SourceFile::new("main.ucl", "if elsex while iff _if");
+    fn recognizes_control_flow_and_function_keywords() {
+        let source = SourceFile::new("main.ucl", "if elsex while fn iff _if fnx");
         let tokens = Lexer::new(&source).tokenize(&mut DiagnosticSink::new());
 
         let kinds: Vec<TokenKind> = tokens.iter().map(|token| token.kind).collect();
@@ -548,6 +551,8 @@ mod tests {
                 TokenKind::Keyword(Keyword::If),
                 TokenKind::Ident,
                 TokenKind::Keyword(Keyword::While),
+                TokenKind::Keyword(Keyword::Function),
+                TokenKind::Ident,
                 TokenKind::Ident,
                 TokenKind::Ident,
                 TokenKind::Eof,

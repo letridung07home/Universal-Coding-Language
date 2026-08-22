@@ -17,6 +17,7 @@ evaluator, command-line interface, and source-aware diagnostics.
 - String concatenation with escape sequences
 - Short-circuiting logical operators
 - `if`/`else` conditionals and `while` loops
+- Named functions, positional parameters, calls, and recursion
 - `let` declarations and assignment
 - Blocks with lexical scoping
 - Line comments beginning with `//`
@@ -31,10 +32,9 @@ Features not described there should be treated as unsupported.
 Create `example.ucl`:
 
 ```ucl
-let width = 6;
-let height = 7;
+fn area(width, height) { width * height; };
 let label = "area";
-if width * height == 42 { label; } else { "mismatch"; };
+if area(6, 7) == 42 { label; } else { "mismatch"; };
 ```
 
 Evaluate it:
