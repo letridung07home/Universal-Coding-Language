@@ -7,7 +7,7 @@ provides an interpreter with a lexer, parser, evaluator, file-based modules,
 an interactive REPL, a command-line interface, and source-aware diagnostics.
 
 > [!NOTE]
-> UCL 1.10 follows the first stable release: the language, CLI, library API, and
+> UCL 1.11 follows the first stable release: the language, CLI, library API, and
 > error categories are covered by [compatibility guarantees](docs/guarantees.md).
 > It remains a deliberately small language — not a batteries-included
 > general-purpose scripting environment.
@@ -15,6 +15,7 @@ an interactive REPL, a command-line interface, and source-aware diagnostics.
 ## Features
 
 - Signed 64-bit integers, booleans, and strings
+- Immutable lists with literals, indexing, equality, and `for` iteration
 - Checked arithmetic, comparison, and equality operators
 - String concatenation with escape sequences and a deterministic 8 MiB value limit
 - Built-in functions: `len(string)`, `str(value)`, `type(value)`,
@@ -172,8 +173,10 @@ internal-quality release that reorganizes the evaluator's source layout and
 adds a CI dependency audit, UCL 1.8 makes shell scripting easier with
 inline `-e/--eval` programs, piped input through `-`, and the `int()`
 conversion built-in, UCL 1.9 completes the string toolkit with the
-`find`, `replace`, `trim`, and `slice` built-ins, and UCL 1.10 adds `for`
-loops over numeric ranges (`for i in 0..5`) and strings. Future directions
+`find`, `replace`, `trim`, and `slice` built-ins, UCL 1.10 adds `for`
+loops over numeric ranges (`for i in 0..5`) and strings, and UCL 1.11 adds
+immutable list values with literals, strict bounds-checked indexing, deep
+equality, and `for` iteration. Future directions
 are sketched in the [project roadmap](docs/roadmap.md).
 
 ## Contributing

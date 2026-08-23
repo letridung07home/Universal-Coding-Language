@@ -67,6 +67,18 @@ pub enum AstKind {
         /// Span of the member identifier.
         member: Span,
     },
+    /// An index expression: `items[0]` or `text[2]`.
+    Index {
+        /// The indexed value.
+        object: Box<AstNode>,
+        /// The index expression; must evaluate to an integer.
+        index: Box<AstNode>,
+    },
+    /// A list literal: `[1, 2, 3]`, possibly empty or nested.
+    List {
+        /// The element expressions in source order.
+        elements: Vec<AstNode>,
+    },
     /// A parenthesized expression.
     Group {
         /// The expression between the parentheses.
@@ -583,6 +595,22 @@ impl Parser {
                         member,
                     },
                 );
+            } else if self.consume_punctuation('[') {
+                let index = self.parse_expression(0, sink)?;
+                let end = if self.consume_punctuation(']') {
+                    self.tokens[self.cursor - 1].span.end
+                } else {
+                    self.error_current("expected `]` after the index", sink);
+                    index.span.end
+                };
+                let span = Span::new(expression.span.start, end);
+                expression = AstNode::new(
+                    span,
+                    AstKind::Index {
+                        object: Box::new(expression),
+                        index: Box::new(index),
+                    },
+                );
             } else {
                 break;
             }
@@ -616,6 +644,34 @@ impl Parser {
             TokenKind::StringLiteral => {
                 self.advance();
                 Some(AstNode::new(token.span, AstKind::StringLiteral))
+            }
+            TokenKind::Punctuation('[') => {
+                let start = self.advance().span.start;
+                let mut elements = Vec::new();
+                if !self.check_punctuation(']') {
+                    loop {
+                        elements.push(self.parse_expression(0, sink)?);
+                        if self.consume_punctuation(',') {
+                            if self.check_punctuation(']') {
+                                break;
+                            }
+                            continue;
+                        }
+                        break;
+                    }
+                }
+                let end = if self.consume_punctuation(']') {
+                    self.tokens[self.cursor - 1].span.end
+                } else {
+                    self.error_current("expected `]` after the list elements", sink);
+                    elements
+                        .last()
+                        .map_or(start + 1, |element| element.span.end)
+                };
+                Some(AstNode::new(
+                    Span::new(start, end),
+                    AstKind::List { elements },
+                ))
             }
             TokenKind::Ident => {
                 self.advance();
@@ -1423,6 +1479,41 @@ mod tests {
         let (_ast, sink) = parse("1 + for i in 0..2 { };");
 
         assert!(sink.has_errors());
+    }
+
+    #[test]
+    fn parses_list_literals_and_index_expressions() {
+        let (ast, sink) = parse("[1, \"two\", [3]];");
+        assert!(!sink.has_errors());
+        let AstKind::Program { statements } = ast.kind else {
+            panic!("expected program")
+        };
+        let AstKind::List { elements } = &statements[0].kind else {
+            panic!("expected a list literal")
+        };
+        assert_eq!(elements.len(), 3);
+        assert!(matches!(elements[2].kind, AstKind::List { .. }));
+
+        // Indexing chains through lists, calls, and members.
+        for source in ["items[0];", "matrix[0][1];", "\"abc\"[1];", "map()[\"k\"];"] {
+            let (ast, sink) = parse(source);
+            assert!(!sink.has_errors(), "for `{source}`");
+            let AstKind::Program { statements } = ast.kind else {
+                panic!("expected program")
+            };
+            assert!(
+                matches!(statements[0].kind, AstKind::Index { .. }),
+                "for `{source}`"
+            );
+        }
+    }
+
+    #[test]
+    fn reports_malformed_lists_and_indexes() {
+        for source in ["[1, 2;", "[1, 2,;", "items[0;", "items[];", "items[0);"] {
+            let (_ast, sink) = parse(source);
+            assert!(sink.has_errors(), "expected an error for `{source}`");
+        }
     }
 
     #[test]

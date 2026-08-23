@@ -71,7 +71,8 @@ Sketched rather than scheduled:
 - [x] More string manipulation built-ins (`find`, `replace`, `trim`, slicing)
       (UCL 1.9)
 - [x] A `for` loop iterating over strings or numeric ranges (UCL 1.10)
-- [ ] Aggregate values such as lists
+- [x] Aggregate values such as lists (UCL 1.11 adds immutable lists with
+      indexing, equality, and iteration)
 - [ ] A source formatter (`ucl fmt`)
 - [x] Scripting ergonomics: inline programs with `-e/--eval`, piped input
       through `-`, and the `int()` conversion built-in (UCL 1.8)

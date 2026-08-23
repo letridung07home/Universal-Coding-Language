@@ -961,6 +961,142 @@ fn decodes_escape_sequences_in_strings() {
 }
 
 #[test]
+fn evaluates_list_literals_and_indexing() {
+    for (source, expected) in [
+        ("[1, 2, 3][0];", 1),
+        ("[1, 2, 3][2];", 3),
+        ("let items = [10, 20]; items[1];", 20),
+        ("[[1, 2], [3, 4]][1][0];", 3),
+        ("len([\"ab\", \"cd\"]);", 2),
+    ] {
+        let (value, sink) = eval(source);
+        assert!(!sink.has_errors(), "unexpected error for `{source}`");
+        assert_eq!(value, Some(Value::Integer(expected)), "for `{source}`");
+    }
+    // String indexing yields one-character strings.
+    for (source, expected) in [("\"hé\"[0];", "h"), ("\"hé\"[1];", "é")] {
+        let (value, sink) = eval(source);
+        assert!(!sink.has_errors(), "unexpected error for `{source}`");
+        assert_eq!(
+            value,
+            Some(Value::Str(expected.to_owned())),
+            "for `{source}`"
+        );
+    }
+}
+
+#[test]
+fn lists_render_with_quoted_strings() {
+    for (source, expected) in [
+        ("str([])", "[]"),
+        ("str([1, 2])", "[1, 2]"),
+        ("str([1, \"two\", true])", "[1, \"two\", true]"),
+        ("str([\"a\", [\"b\"]])", "[\"a\", [\"b\"]]"),
+    ] {
+        let (value, sink) = eval(source);
+        assert!(!sink.has_errors(), "unexpected error for `{source}`");
+        assert_eq!(
+            value,
+            Some(Value::Str(expected.to_owned())),
+            "for `{source}`"
+        );
+    }
+}
+
+#[test]
+fn len_and_contains_accept_lists() {
+    for (source, expected) in [
+        ("len([]) == 0;", true),
+        ("len([1, 2, 3]) == 3;", true),
+        ("contains([1, 2, 3], 2);", true),
+        ("contains([1, 2, 3], 4);", false),
+        // Membership uses the same equality as `==`.
+        ("contains([[1], [2]], [2]);", true),
+        ("contains(\"abc\", \"b\");", true),
+    ] {
+        let (value, sink) = eval(source);
+        assert!(!sink.has_errors(), "unexpected error for `{source}`");
+        assert_eq!(value, Some(Value::Boolean(expected)), "for `{source}`");
+    }
+}
+
+#[test]
+fn compares_lists_for_deep_equality() {
+    for (source, expected) in [
+        ("[1, 2] == [1, 2];", true),
+        ("[1, 2] == [2, 1];", false),
+        ("[] == [];", true),
+        ("[1, [2, 3]] == [1, [2, 3]];", true),
+        ("[1] != [2];", true),
+        ("[\"a\"] == [\"a\"];", true),
+    ] {
+        let (value, sink) = eval(source);
+        assert!(!sink.has_errors(), "unexpected error for `{source}`");
+        assert_eq!(value, Some(Value::Boolean(expected)), "for `{source}`");
+    }
+    // Mixed-type comparisons remain errors.
+    let (value, sink) = eval("[1] == \"1\";");
+    assert_eq!(value, None);
+    assert!(sink.has_errors());
+}
+
+#[test]
+fn for_loops_iterate_lists() {
+    let (value, sink) = eval("let total = 0; for x in [1, 2, 3] { total = total + x; }; total;");
+    assert!(!sink.has_errors());
+    assert_eq!(value, Some(Value::Integer(6)));
+
+    let (value, sink) = eval("let n = 0; for x in [] { n = n + 1; }; n;");
+    assert!(!sink.has_errors());
+    assert_eq!(value, Some(Value::Integer(0)));
+}
+
+#[test]
+fn reports_index_out_of_range_and_type_errors() {
+    // Strict bounds on both lists and strings.
+    for source in [
+        "[1, 2][2];",
+        "[1, 2][-1];",
+        "[][0];",
+        "\"ab\"[2];",
+        "\"ab\"[-1];",
+    ] {
+        let (value, sink) = eval(source);
+        assert_eq!(value, None, "expected an error for `{source}`");
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("`index` is out of range")),
+            "for `{source}`"
+        );
+    }
+    // Type errors.
+    for source in [
+        "42[0];",
+        "true[0];",
+        "[1, 2][\"a\"];",
+        "\"ab\"[true];",
+        "let f = fn() { }; f[0];",
+    ] {
+        let (value, sink) = eval(source);
+        assert_eq!(value, None, "expected an error for `{source}`");
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("`index`")
+                    || diagnostic.message.contains("cannot index")),
+            "for `{source}`"
+        );
+    }
+}
+
+#[test]
+fn list_concatenation_is_not_yet_defined() {
+    for source in ["[1] + [2];", "[1, 2] + 3;"] {
+        let (value, _sink) = eval(source);
+        assert_eq!(value, None, "expected an error for `{source}`");
+    }
+}
+
+#[test]
 fn compares_strings_for_equality() {
     for (source, expected) in [
         ("\"a\" == \"a\";", true),

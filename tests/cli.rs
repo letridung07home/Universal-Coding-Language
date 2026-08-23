@@ -158,7 +158,7 @@ fn reports_len_errors_without_stdout() {
     let (stdout, stderr, success) = run("len(1);");
     assert!(!success);
     assert!(stdout.is_empty());
-    assert!(stderr.contains("`len` expects a string argument"));
+    assert!(stderr.contains("`len` expects a string or list argument"));
 }
 
 #[test]
@@ -487,6 +487,23 @@ fn for_loop_programs_run_end_to_end() {
         run_file_with_code("let total = 0; for i in 1..5 { total = total + i; }; total;");
     assert_eq!(code, 0);
     assert_eq!(stdout.trim(), "10");
+}
+
+#[test]
+fn list_programs_run_end_to_end() {
+    let (stdout, _stderr, code) =
+        run_file_with_code("let items = [\"x\", \"y\", \"z\"]; len(items);");
+    assert_eq!(code, 0);
+    assert_eq!(stdout.trim(), "3");
+
+    let (stdout, _stderr, code) =
+        run_file_with_code("for word in [\"a\", \"b\"] { word; }; \"done\";");
+    assert_eq!(code, 0);
+    assert_eq!(stdout.trim(), "done");
+
+    let (_stdout, stderr, code) = run_file_with_code("[1, 2][9];");
+    assert_eq!(code, 1);
+    assert!(stderr.contains("`index` is out of range"));
 }
 
 #[test]

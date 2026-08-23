@@ -250,6 +250,16 @@ impl Evaluator {
                 environment.pop_scope();
                 last
             }
+            AstKind::List { elements } => {
+                let mut values = Vec::with_capacity(elements.len());
+                for element in elements {
+                    values.push(self.eval(element, source, environment, sink, depth + 1));
+                    if self.has_pending_flow() || self.resource_exhausted.get() || sink.is_full() {
+                        return Value::Unit;
+                    }
+                }
+                Value::List(values)
+            }
             AstKind::Let { name, value, .. } => {
                 // Spans come from the parser and are valid there, but ASTs
                 // can also be constructed through the public API with
@@ -310,6 +320,56 @@ impl Evaluator {
                                 other.type_name()
                             ))
                             .at(node.span),
+                        );
+                        Value::Unit
+                    }
+                }
+            }
+            AstKind::Index { object, index } => {
+                let object_span = object.span;
+                let object = self.eval(object, source, environment, sink, depth + 1);
+                let index_value = self.eval(index, source, environment, sink, depth + 1);
+                let Value::Integer(i) = index_value else {
+                    sink.emit(
+                        Diagnostic::error(format!(
+                            "`index` must be an integer, found `{}`",
+                            index_value.type_name()
+                        ))
+                        .at(index.span),
+                    );
+                    return Value::Unit;
+                };
+                // Bounds are strict, matching `slice`: negative and
+                // out-of-range indices are runtime errors rather than
+                // silent lookups.
+                match object {
+                    Value::List(elements) => {
+                        if i < 0 || i as usize >= elements.len() {
+                            sink.emit(Diagnostic::error("`index` is out of range").at(node.span));
+                            return Value::Unit;
+                        }
+                        elements[i as usize].clone()
+                    }
+                    Value::Str(text) => {
+                        let characters = text.chars().count();
+                        if i < 0 || i as usize >= characters {
+                            sink.emit(Diagnostic::error("`index` is out of range").at(node.span));
+                            return Value::Unit;
+                        }
+                        Value::Str(
+                            text.chars()
+                                .nth(i as usize)
+                                .expect("the bounds check above passed")
+                                .to_string(),
+                        )
+                    }
+                    other => {
+                        sink.emit(
+                            Diagnostic::error(format!(
+                                "cannot index a value of type `{}`",
+                                other.type_name()
+                            ))
+                            .at(object_span),
                         );
                         Value::Unit
                     }
@@ -665,6 +725,13 @@ impl Evaluator {
                                 .take(MAX_LOOP_ITERATIONS as usize + 1)
                                 .collect(),
                         ),
+                        Value::List(mut elements) => {
+                            // One extra element lets the executor
+                            // distinguish a completed loop from one cut
+                            // off by the cap.
+                            elements.truncate(MAX_LOOP_ITERATIONS as usize + 1);
+                            Some(elements)
+                        }
                         other => {
                             sink.emit(
                                 Diagnostic::error(format!(
@@ -803,10 +870,11 @@ impl Evaluator {
                 }
                 match &values[0] {
                     Value::Str(value) => Value::Integer(value.chars().count() as i64),
+                    Value::List(elements) => Value::Integer(elements.len() as i64),
                     other => {
                         sink.emit(
                             Diagnostic::error(format!(
-                                "`len` expects a string argument, found `{}`",
+                                "`len` expects a string or list argument, found `{}`",
                                 other.type_name()
                             ))
                             .at(span),
@@ -877,9 +945,15 @@ impl Evaluator {
                     );
                     return Value::Unit;
                 }
+                if let Value::List(elements) = haystack {
+                    // List membership uses the same equality as `==`:
+                    // elements match by value, recursing through nested
+                    // lists.
+                    return Value::Boolean(elements.iter().any(|element| element == needle));
+                }
                 sink.emit(
                     Diagnostic::error(format!(
-                        "`contains` expects a string haystack, found `{}`",
+                        "`contains` expects a string or list haystack, found `{}`",
                         haystack.type_name()
                     ))
                     .at(span),
@@ -1206,8 +1280,9 @@ impl Evaluator {
                 })
             }
             Equal | NotEqual => {
-                // Equality is defined for two integers, two booleans, or two
-                // strings; comparing values of different types is an error.
+                // Equality is defined for two integers, two booleans, two
+                // strings, or two lists (compared element by element);
+                // comparing values of different types is an error.
                 match (left, right) {
                     (Value::Integer(a), Value::Integer(b)) => {
                         Value::Boolean(if operator == Equal { a == b } else { a != b })
@@ -1216,6 +1291,11 @@ impl Evaluator {
                         Value::Boolean(if operator == Equal { a == b } else { a != b })
                     }
                     (Value::Str(a), Value::Str(b)) => {
+                        Value::Boolean(if operator == Equal { a == b } else { a != b })
+                    }
+                    (Value::List(a), Value::List(b)) => {
+                        // `Vec`'s equality compares element by element,
+                        // recursing through nested lists.
                         Value::Boolean(if operator == Equal { a == b } else { a != b })
                     }
                     (l, r) => binary_type_error(operator, &l, &r, span, sink),
@@ -1277,6 +1357,10 @@ impl Evaluator {
                 Self::may_mutate_bindings(left) || Self::may_mutate_bindings(right)
             }
             AstKind::Group { expression } => Self::may_mutate_bindings(expression),
+            AstKind::List { elements } => elements.iter().any(Self::may_mutate_bindings),
+            AstKind::Index { object, index } => {
+                Self::may_mutate_bindings(object) || Self::may_mutate_bindings(index)
+            }
             _ => false,
         }
     }

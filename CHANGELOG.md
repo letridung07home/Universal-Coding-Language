@@ -2,6 +2,27 @@
 
 All notable changes to UCL are documented here.
 
+## 1.11.0 - 2026-08-23
+
+### Added
+
+- Immutable list values, the first aggregate type:
+  - List literals `[1, "two", [3]]` nest arbitrarily; `[]` is the empty
+    list.
+  - Indexing with `items[0]` yields elements; `"hello"[1]` indexes strings
+    the same way, yielding one-character strings. Indices are zero-based
+    and strict: negative or out-of-range indices are runtime errors.
+  - `==`/`!=` compare lists element by element, recursing through nesting.
+  - `for x in list { ... }` iterates elements in order.
+  - `len` counts a list's elements and `contains` tests list membership
+    using the same equality as `==`.
+- Lists echo their full contents — `[1, "two", true]` — with element
+  strings quoted; this text is shared by the CLI echo, the REPL, and
+  `str()`.
+
+Lists have no mutation yet: element assignment and concatenation remain
+undefined and can be added later without breaking changes.
+
 ## 1.10.0 - 2026-08-23
 
 ### Added

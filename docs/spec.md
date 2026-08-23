@@ -18,6 +18,7 @@ The current implementation is intentionally small. It provides:
 - integer, boolean, and string operators;
 - `let` declarations, assignment, blocks, and lexical scoping;
 - named functions with positional parameters, calls, and recursion;
+- immutable list values with literals, indexing, equality, and iteration;
 - a built-in prelude: `len(string)`, `str(value)`, `type(value)`,
   `upper(string)`, `lower(string)`, `contains(haystack, needle)`, `int(value)`,
   `find(haystack, needle)`, `replace(source, pattern, replacement)`,
@@ -127,6 +128,7 @@ error and skipped, so scanning continues after it.
 | `integer` | A signed 64-bit integer.               | `42`, `2 + 3`    |
 | `boolean` | `true` or `false`.                     | `true`, `1 < 2`  |
 | `string`  | A sequence of Unicode characters.      | `"hello"`, `"a" + "b"` |
+| `list`    | An ordered, immutable sequence of values. | `[1, 2, 3]`, `[]` |
 | `function` | A callable with positional parameters. | `fn add(a, b) { a + b; }`, `fn(n) { n; }` |
 
 UCL is **dynamically typed**. Values carry runtime types and operators
@@ -147,14 +149,18 @@ binary-expression  ::= unary-expression
 unary-expression   ::= prefix-operator unary-expression
                      | postfix-expression
 postfix-expression ::= primary ("(" argument-list? ")")*
+                     | primary ("[" expression "]")*
 argument-list      ::= expression ("," expression)*
 primary            ::= integer-literal
                    | boolean-literal
                    | string-literal
+                   | list-literal
                    | function-literal
                    | identifier
                    | "(" expression ")"
                    | block
+list-literal       ::= "[" expression-list? "]"
+expression-list    ::= expression ("," expression)*
 if-expression   ::= "if" expression block ("else" (block | if-expression))?
 ```
 
@@ -163,6 +169,9 @@ A *primary* is:
 - an **integer literal**, evaluating to that integer;
 - a **boolean literal**, evaluating to that boolean;
 - a **string literal**, evaluating to that string with escapes decoded;
+- a **list literal** `[ expression, ... ]`, evaluating to a `list` value
+  holding the element expressions' values in source order; lists nest
+  arbitrarily and an empty list is written `[]`;
 - a **function literal**, evaluating to a `function` value (§4.4);
 - an **identifier**, evaluating to the value of the referenced binding (an
   unbound identifier is an error);
@@ -257,12 +266,12 @@ The prelude currently provides these built-ins:
 
 | Call | Result |
 |------|--------|
-| `len(string)` | An integer equal to the number of Unicode scalar values in `string`. |
-| `str(value)` | A string holding the same text the CLI and REPL echo for `value`: integers and booleans render as written, strings are unchanged, functions render as `<function>`, modules render as `<module>`, and unit renders as `unit`. |
-| `type(value)` | A string naming the value's type: `integer`, `boolean`, `string`, `function`, or `module`. |
+| `len(value)` | An integer equal to the number of Unicode scalar values in `value` when it is a string, or the number of elements when it is a list. |
+| `str(value)` | A string holding the same text the CLI and REPL echo for `value`: integers and booleans render as written, strings are unchanged, lists render as `[` + elements + `]` with element strings quoted, functions render as `<function>`, modules render as `<module>`, and unit renders as `unit`. |
+| `type(value)` | A string naming the value's type: `integer`, `boolean`, `string`, `list`, `function`, or `module`. |
 | `upper(string)` | The string converted to upper case. |
 | `lower(string)` | The string converted to lower case. |
-| `contains(haystack, needle)` | A boolean reporting whether the string `haystack` contains the string `needle` as a substring. |
+| `contains(haystack, needle)` | A boolean reporting whether the string `haystack` contains the string `needle` as a substring, or whether the list `haystack` contains an element equal to `needle` (using `==`, so nested lists compare element by element). |
 | `int(value)` | An integer parsed from `value`: strings must consist of an optional `+` or `-` sign followed by ASCII decimal digits, with no surrounding whitespace; integers pass through unchanged. Parsing failures, out-of-range values, and non-string arguments are runtime errors. |
 | `find(haystack, needle)` | An integer giving the scalar-value index of the first occurrence of the string `needle` in the string `haystack`, or `-1` if it does not occur. |
 | `replace(source, pattern, replacement)` | A copy of the string `source` with every occurrence of the string `pattern` replaced by the string `replacement`. An empty `pattern` is a runtime error. |
@@ -285,8 +294,19 @@ no dynamic scoping. Assignments to globals made by a function persist after
 the call. A top-level function's own name resolves dynamically at call time,
 allowing recursion.
 
-### 4.4 Function literals and closures
+### 4.3.2 Index expressions
 
+An index expression has the form `object[index]` and may chain
+(`matrix[0][1]`). The object is evaluated first, then the index, which must
+evaluate to an integer.
+
+Indexing a **list** yields the element at that position; indexing a
+**string** yields the one-character string at that scalar-value position
+(matching how `len` counts). Indices are zero-based and strict: a negative
+or out-of-range index is a runtime error, never a silent lookup. Indexing
+any other type is a runtime error.
+
+### 4.4 Function literals and closures
 ```
 function-literal ::= "fn" "(" parameter-list? ")" block
 ```
@@ -366,6 +386,8 @@ per iteration. Two forms are supported:
 - **String form** `for ch in value`: the expression must evaluate to a
   string, and the loop iterates over its Unicode scalar values in order,
   binding each as a one-character string.
+- **List form** `for item in value`: the expression must evaluate to a list,
+  and the loop iterates over its elements in order.
 
 The two dot characters of `..` must be adjacent; the separator is legal only
 in a `for` header and is not a general expression operator.
@@ -373,7 +395,6 @@ in a `for` header and is not a general expression operator.
 An empty range (`start == end`) or inverted range (`start > end`) performs
 zero iterations; it is not an error. Iterating any other value — integers,
 booleans, functions, modules — is a runtime error.
-
 Each iteration introduces a fresh lexical scope holding only the loop
 variable, nested inside the scope where the statement appears; the variable
 is not visible after the loop ends, and an outer binding of the same name is

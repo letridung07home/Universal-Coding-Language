@@ -59,6 +59,8 @@ pub enum Value {
     Builtin(BuiltinFunction),
     /// A read-only namespace produced by an aliased module import.
     Module(ModuleValue),
+    /// An ordered, immutable sequence of values.
+    List(Vec<Value>),
 }
 
 /// A callable UCL function value.
@@ -102,6 +104,7 @@ impl Value {
             Value::Str(_) => "string",
             Value::Function(_) | Value::Builtin(_) => "function",
             Value::Module(_) => "module",
+            Value::List(_) => "list",
         }
     }
 
@@ -118,6 +121,25 @@ impl Value {
             Value::Str(string) => string.clone(),
             Value::Function(_) | Value::Builtin(_) => "<function>".to_owned(),
             Value::Module(_) => "<module>".to_owned(),
+            Value::List(elements) => {
+                let rendered = elements
+                    .iter()
+                    .map(|element| element.element_text())
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                format!("[{rendered}]")
+            }
+        }
+    }
+
+    /// Renders the value the way it appears *inside* an echoed list.
+    ///
+    /// Strings are quoted so list contents stay unambiguous; everything
+    /// else renders exactly as it does at top level.
+    fn element_text(&self) -> String {
+        match self {
+            Value::Str(string) => format!("\"{string}\""),
+            other => other.display_text(),
         }
     }
 }
