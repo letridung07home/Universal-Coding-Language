@@ -64,6 +64,17 @@ Every item on this roadmap is now complete. Future work starts from a blank
 page; the language, CLI, library API, and error categories remain covered by
 the compatibility guarantees.
 
+## Beyond 1.7
+
+Sketched rather than scheduled:
+
+- [ ] More string manipulation built-ins (`find`, `replace`, `trim`, slicing)
+- [ ] A `for` loop iterating over strings or numeric ranges
+- [ ] Aggregate values such as lists
+- [ ] A source formatter (`ucl fmt`)
+- [x] Scripting ergonomics: inline programs with `-e/--eval`, piped input
+      through `-`, and the `int()` conversion built-in (UCL 1.8)
+
 Each of these is additive; none would require a breaking change. UCL 1.1 adds
 a deterministic 8 MiB string-value limit to keep repeated concatenation from
 exhausting host memory. UCL 1.2 adds read-only namespace aliases backed by a

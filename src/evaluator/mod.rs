@@ -5,11 +5,8 @@
 //! because nodes carry [`Span`]s rather than their text, so identifier names
 //! and integer literals are read back out of the source.
 //!
-//! Operator semantics, until the specification is written:
-//!
-//! - Integers: `+`, `-`, `*`, `/`, `%`, and `^` (exponentiation).
-//! - Comparison: `<` and `>` on integers, producing booleans.
-//! - Booleans: unary `!`, and infix `&` (and) / `|` (or).
+//! Operator and statement semantics are normative in the language
+//! specification (`docs/spec.md`); this module implements them.
 //!
 //! ## Error Handling
 //!
@@ -789,6 +786,45 @@ impl Evaluator {
                     .at(span),
                 );
                 Value::Unit
+            }
+            BuiltinFunction::Int => {
+                if !Self::check_arity(BuiltinFunction::Int.name(), values, 1, span, sink) {
+                    return Value::Unit;
+                }
+                match &values[0] {
+                    Value::Integer(value) => Value::Integer(*value),
+                    Value::Str(text) => match text.parse::<i64>() {
+                        Ok(value) => Value::Integer(value),
+                        Err(parse_error) => {
+                            // Range failures get the same message as the
+                            // arithmetic operators; everything else is a
+                            // malformed integer.
+                            if *parse_error.kind() == std::num::IntErrorKind::PosOverflow
+                                || *parse_error.kind() == std::num::IntErrorKind::NegOverflow
+                            {
+                                overflow(span, sink)
+                            } else {
+                                sink.emit(
+                                    Diagnostic::error(
+                                        "`int` cannot parse the string as an integer",
+                                    )
+                                    .at(span),
+                                );
+                                Value::Unit
+                            }
+                        }
+                    },
+                    other => {
+                        sink.emit(
+                            Diagnostic::error(format!(
+                                "`int` expects a string argument, found `{}`",
+                                other.type_name()
+                            ))
+                            .at(span),
+                        );
+                        Value::Unit
+                    }
+                }
             }
         }
     }

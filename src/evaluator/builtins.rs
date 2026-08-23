@@ -19,6 +19,8 @@ pub enum BuiltinFunction {
     Lower,
     /// Reports whether one string contains another as a substring.
     Contains,
+    /// Parses a string as a signed 64-bit integer; integers pass through.
+    Int,
 }
 
 impl BuiltinFunction {
@@ -31,6 +33,7 @@ impl BuiltinFunction {
             Self::Upper => "upper",
             Self::Lower => "lower",
             Self::Contains => "contains",
+            Self::Int => "int",
         }
     }
 
@@ -43,6 +46,7 @@ impl BuiltinFunction {
             Self::Upper,
             Self::Lower,
             Self::Contains,
+            Self::Int,
         ]
         .into_iter()
     }

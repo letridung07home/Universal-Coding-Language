@@ -69,6 +69,34 @@ fn run_args(args: &[&str]) -> (String, String, i32) {
     )
 }
 
+/// Pipes `source` to the `ucl` binary's stdin along with the given arguments,
+/// and returns its stdout, stderr, and exit code.
+fn run_stdin(source: &str, args: &[&str]) -> (String, String, i32) {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_ucl"))
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn the ucl binary");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin is piped")
+        .write_all(source.as_bytes())
+        .expect("write program text to stdin");
+    let output = child.wait_with_output().expect("run the ucl binary");
+
+    (
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+        output.status.code().expect("the process exited normally"),
+    )
+}
+
 #[test]
 fn evaluates_a_source_file_and_prints_the_result() {
     let (stdout, stderr, success) = run("2 + 3 * 4;");
@@ -251,6 +279,94 @@ fn break_outside_a_loop_reports_an_error() {
 }
 
 #[test]
+fn eval_flag_runs_inline_program_text() {
+    let (stdout, stderr, code) = run_args(&["-e", "let x = 6 * 7; x;"]);
+    assert_eq!(code, 0);
+    assert_eq!(stdout, "42\n");
+    assert!(stderr.is_empty());
+
+    let (stdout, stderr, code) = run_args(&["--eval", "upper(\"ucl\");"]);
+    assert_eq!(code, 0);
+    assert_eq!(stdout, "UCL\n");
+    assert!(stderr.is_empty());
+}
+
+#[test]
+fn eval_flag_reports_runtime_errors_against_the_eval_source() {
+    let (stdout, stderr, code) = run_args(&["-e", "1 / 0;"]);
+    assert_eq!(code, 1);
+    assert!(stdout.is_empty());
+    assert!(stderr.contains("error: division by zero"));
+    assert!(stderr.contains("<eval>:1:1"));
+}
+
+#[test]
+fn eval_flag_resolves_imports_through_path_flags() {
+    let lib = temp_dir();
+    fs::create_dir_all(&lib).expect("create lib dir");
+    fs::write(lib.join("helper.ucl"), "let answer = 40;").expect("write module");
+
+    let lib_string = lib.display().to_string();
+    let (stdout, stderr, code) =
+        run_args(&["-p", &lib_string, "-e", "use \"helper\"; answer + 2;"]);
+
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert_eq!(stdout, "42\n");
+
+    let _ = fs::remove_dir_all(lib);
+}
+
+#[test]
+fn eval_flag_combinations_are_usage_errors() {
+    let source = temp_path();
+    fs::write(&source, "1;").expect("write source file");
+
+    let (stdout, stderr, code) = run_args(&["-e", "2;", "-e", "3;"]);
+    assert_eq!(code, 2);
+    assert!(stdout.is_empty());
+    assert!(stderr.contains("expected a single `--eval` program"));
+
+    let source_string = source.display().to_string();
+    let (stdout, stderr, code) = run_args(&["-e", "2;", &source_string]);
+    assert_eq!(code, 2);
+    assert!(stdout.is_empty());
+    assert!(stderr.contains("cannot combine `--eval` with a source file"));
+
+    // A missing `-e` value is also a usage error.
+    let (_stdout, stderr, code) = run_args(&["-e"]);
+    assert_eq!(code, 2);
+    assert!(stderr.contains("`-e` requires program text"));
+
+    let _ = fs::remove_file(source);
+}
+
+#[test]
+fn dash_reads_the_program_from_piped_stdin() {
+    let (stdout, stderr, code) = run_stdin("2 + 3 * 4;", &["-"]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert_eq!(stdout, "14\n");
+    assert!(stderr.is_empty());
+
+    let (stdout, stderr, code) = run_stdin("int(\"40\") + 2;", &["-"]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert_eq!(stdout, "42\n");
+    assert!(stderr.is_empty());
+
+    // Runtime errors still report with the `<stdin>` excerpt.
+    let (stdout, stderr, code) = run_stdin("1 / 0;", &["-"]);
+    assert_eq!(code, 1);
+    assert!(stdout.is_empty());
+    assert!(stderr.contains("error: division by zero"));
+    assert!(stderr.contains("<stdin>:1:1"));
+
+    // `-` cannot share the command line with `--eval` or another file.
+    let (stdout, stderr, code) = run_stdin("1;", &["-e", "2;", "-"]);
+    assert_eq!(code, 2);
+    assert!(stdout.is_empty());
+    assert!(stderr.contains("cannot combine `--eval` with standard input"));
+}
+
+#[test]
 fn ucl_path_environment_resolves_imports() {
     let app = temp_dir();
     let lib = temp_dir();
@@ -383,7 +499,8 @@ fn syntax_errors_stop_the_pipeline_before_evaluation() {
 fn help_flag_prints_usage_and_exits_zero() {
     let (stdout, stderr, code) = run_args(&["--help"]);
     assert_eq!(code, 0);
-    assert!(stdout.contains("usage: ucl [-p <dir>]... [<file>]"));
+    assert!(stdout.contains("usage: ucl [-p <dir>]... [-e <code> | <file>]"));
+    assert!(stdout.contains("-e, --eval <code>"));
     assert!(stderr.is_empty());
 }
 
@@ -391,7 +508,7 @@ fn help_flag_prints_usage_and_exits_zero() {
 fn short_help_flag_is_equivalent() {
     let (stdout, _stderr, code) = run_args(&["-h"]);
     assert_eq!(code, 0);
-    assert!(stdout.contains("usage: ucl [-p <dir>]... [<file>]"));
+    assert!(stdout.contains("usage: ucl [-p <dir>]... [-e <code> | <file>]"));
 }
 
 #[test]
@@ -407,7 +524,7 @@ fn unknown_option_is_a_usage_error() {
     let (_stdout, stderr, code) = run_args(&["--bogus"]);
     assert_eq!(code, 2);
     assert!(stderr.contains("unknown option `--bogus`"));
-    assert!(stderr.contains("usage: ucl [-p <dir>]... [<file>]"));
+    assert!(stderr.contains("usage: ucl [-p <dir>]... [-e <code> | <file>]"));
 }
 
 #[test]

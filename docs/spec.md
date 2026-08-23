@@ -19,7 +19,8 @@ The current implementation is intentionally small. It provides:
 - `let` declarations, assignment, blocks, and lexical scoping;
 - named functions with positional parameters, calls, and recursion;
 - a built-in prelude: `len(string)`, `str(value)`, `type(value)`,
-  `upper(string)`, `lower(string)`, and `contains(haystack, needle)`;
+  `upper(string)`, `lower(string)`, `contains(haystack, needle)`, and
+  `int(value)`;
 - conditional expressions (`if`/`else`), `while` loops, and `break`/
   `continue` loop control;
 - local-file modules with flat or read-only namespaced imports, extensionless
@@ -260,11 +261,12 @@ The prelude currently provides these built-ins:
 | `upper(string)` | The string converted to upper case. |
 | `lower(string)` | The string converted to lower case. |
 | `contains(haystack, needle)` | A boolean reporting whether the string `haystack` contains the string `needle` as a substring. |
+| `int(value)` | An integer parsed from `value`: strings must consist of an optional `+` or `-` sign followed by ASCII decimal digits, with no surrounding whitespace; integers pass through unchanged. Parsing failures, out-of-range values, and non-string arguments are runtime errors. |
 
 For example, `len("hé")` evaluates to `2`, `upper("hé")` evaluates to `"HÉ"`,
-and `type(len)` evaluates to `"function"`. Calling a built-in with anything
-other than exactly its declared arguments, or with arguments of the wrong
-types, is a runtime error.
+`type(len)` evaluates to `"function"`, and `int("-41") + 1` evaluates to
+`-40`. Calling a built-in with anything other than exactly its declared
+arguments, or with arguments of the wrong types, is a runtime error.
 
 Strings produced by built-ins are subject to the same deterministic value
 limit as any other string.

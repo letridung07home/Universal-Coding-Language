@@ -42,7 +42,9 @@ source text -> lexer -> parser -> evaluator
 - `diagnostic.rs` collects structured errors, warnings, and notes.
 - `lexer.rs` converts source text into tokens.
 - `parser.rs` converts tokens into an abstract syntax tree.
-- `evaluator.rs` executes the abstract syntax tree.
+- `evaluator/` executes the abstract syntax tree (`mod.rs` holds the core
+  evaluator, `value.rs` the runtime values, `environment.rs` lexical scopes,
+  and `builtins.rs` the prelude).
 - `module.rs` loads `use` imports: path resolution, cycle detection,
   evaluation isolation, and binding merges.
 - `render.rs` renders diagnostics with source excerpts.

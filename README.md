@@ -7,7 +7,7 @@ provides an interpreter with a lexer, parser, evaluator, file-based modules,
 an interactive REPL, a command-line interface, and source-aware diagnostics.
 
 > [!NOTE]
-> UCL 1.7 follows the first stable release: the language, CLI, library API, and
+> UCL 1.8 follows the first stable release: the language, CLI, library API, and
 > error categories are covered by [compatibility guarantees](docs/guarantees.md).
 > It remains a deliberately small language — not a batteries-included
 > general-purpose scripting environment.
@@ -18,7 +18,8 @@ an interactive REPL, a command-line interface, and source-aware diagnostics.
 - Checked arithmetic, comparison, and equality operators
 - String concatenation with escape sequences and a deterministic 8 MiB value limit
 - Built-in functions: `len(string)`, `str(value)`, `type(value)`,
-  `upper(string)`, `lower(string)`, and `contains(haystack, needle)`
+  `upper(string)`, `lower(string)`, `contains(haystack, needle)`, and
+  `int(value)`
 - Short-circuiting logical operators
 - `if`/`else` conditionals and `while` loops with `break` and `continue`
 - Functions: declarations, literals, closures, and recursion
@@ -164,10 +165,12 @@ namespaced module imports, and UCL 1.3 rounds out the built-in prelude with
 `str`, `type`, `upper`, `lower`, and `contains`. UCL 1.4 broadens the
 prebuilt release binaries to macOS and Windows, UCL 1.5 completes the roadmap
 with extensionless imports and configurable module search paths, UCL 1.6
-adds `break` and `continue` loop control statements, and UCL 1.7 is an
+adds `break` and `continue` loop control statements, UCL 1.7 is an
 internal-quality release that reorganizes the evaluator's source layout and
-adds a CI dependency audit with no behavior changes. Future directions are
-sketched in the [project roadmap](docs/roadmap.md).
+adds a CI dependency audit, and UCL 1.8 makes shell scripting easier with
+inline `-e/--eval` programs, piped input through `-`, and the `int()`
+conversion built-in. Future directions are sketched in the
+[project roadmap](docs/roadmap.md).
 
 ## Contributing
 

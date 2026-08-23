@@ -693,6 +693,76 @@ fn user_bindings_may_shadow_new_builtins() {
 }
 
 #[test]
+fn parses_integers_from_strings() {
+    for (source, expected) in [
+        ("int(\"42\");", 42),
+        ("int(\"-42\");", -42),
+        ("int(\"+7\");", 7),
+        ("int(\"0\");", 0),
+        ("int(\"007\");", 7),
+        ("int(\"9223372036854775807\");", i64::MAX),
+        ("int(\"-9223372036854775808\");", i64::MIN),
+    ] {
+        let (value, sink) = eval(source);
+        assert!(!sink.has_errors(), "for `{source}`");
+        assert_eq!(value, Some(Value::Integer(expected)), "for `{source}`");
+    }
+}
+
+#[test]
+fn int_passes_integers_through_like_str_passes_strings() {
+    let (value, sink) = eval("int(42);");
+    assert!(!sink.has_errors());
+    assert_eq!(value, Some(Value::Integer(42)));
+}
+
+#[test]
+fn reports_int_parse_type_and_overflow_errors() {
+    // Malformed text.
+    for source in [
+        "int(\"\");",
+        "int(\" 1\");",
+        "int(\"1 \");",
+        "int(\"1.5\");",
+        "int(\"one\");",
+        "int(\"--1\");",
+    ] {
+        let (value, sink) = eval(source);
+        assert_eq!(value, None, "expected an error for `{source}`");
+        assert!(
+            sink.iter().any(|diagnostic| diagnostic
+                .message
+                .contains("`int` cannot parse the string as an integer")),
+            "for `{source}`"
+        );
+    }
+    // Overflow matches arithmetic overflow reporting.
+    let (value, sink) = eval("int(\"99999999999999999999\");");
+    assert_eq!(value, None);
+    assert!(
+        sink.iter()
+            .any(|diagnostic| { diagnostic.message.contains("integer overflow") })
+    );
+    // Type errors.
+    for source in ["int();", "int(true);", "int(1, 2);"] {
+        let (value, sink) = eval(source);
+        assert_eq!(value, None, "expected an error for `{source}`");
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("`int`")),
+            "for `{source}`"
+        );
+    }
+}
+
+#[test]
+fn user_bindings_may_shadow_int() {
+    let (value, sink) = eval("let int = fn(value) { value + 1; }; int(41);");
+    assert!(!sink.has_errors());
+    assert_eq!(value, Some(Value::Integer(42)));
+}
+
+#[test]
 fn decodes_escape_sequences_in_strings() {
     let (value, sink) = eval(r##""a\tb\nc\"d\\";"##);
     assert!(!sink.has_errors());

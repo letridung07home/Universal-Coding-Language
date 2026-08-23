@@ -2,6 +2,25 @@
 
 All notable changes to UCL are documented here.
 
+## 1.8.0 - 2026-08-23
+
+### Added
+
+- The `-e`/`--eval <code>` flag evaluates an inline program without a source
+  file, reporting runtime errors against an `<eval>` source excerpt.
+- A file name of `-` reads the program from standard input, enabling shell
+  pipelines such as `echo '1 + 1;' | ucl -`; errors report against
+  `<stdin>`.
+- The `int(value)` built-in: strings with an optional sign and ASCII decimal
+  digits parse to integers, integers pass through unchanged (mirroring
+  `str`), and parse failures, out-of-range values, and type errors are
+  reported like the other built-ins.
+
+### Changed
+
+- The evaluator's module docs no longer describe operator semantics as
+  pending; they now point at the normative specification.
+
 ## 1.7.0 - 2026-08-23
 
 ### Changed
