@@ -2,6 +2,23 @@
 
 All notable changes to UCL are documented here.
 
+## 1.10.0 - 2026-08-23
+
+### Added
+
+- The `for` loop, the first new statement form since modules:
+  - Range form `for i in start..end { ... }` iterates over a half-open
+    numeric range, consistent with `slice` indexing; bounds are evaluated
+    once before the first iteration.
+  - String form `for ch in value { ... }` iterates over the Unicode scalar
+    values of a string, binding each as a one-character string.
+  - Empty and inverted ranges perform zero iterations; iterating any other
+    type is a runtime error. Each iteration binds a fresh body-scoped
+    variable. `break` and `continue` apply, and the 100,000-iteration cap
+    guards runaway ranges.
+- Two new reserved words come with the syntax: `for` and `in` can no longer
+  be used as identifiers (matching the `break`/`continue` precedent).
+
 ## 1.9.0 - 2026-08-23
 
 ### Added

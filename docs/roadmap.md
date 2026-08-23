@@ -70,7 +70,7 @@ Sketched rather than scheduled:
 
 - [x] More string manipulation built-ins (`find`, `replace`, `trim`, slicing)
       (UCL 1.9)
-- [ ] A `for` loop iterating over strings or numeric ranges
+- [x] A `for` loop iterating over strings or numeric ranges (UCL 1.10)
 - [ ] Aggregate values such as lists
 - [ ] A source formatter (`ucl fmt`)
 - [x] Scripting ergonomics: inline programs with `-e/--eval`, piped input

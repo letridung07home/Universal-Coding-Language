@@ -22,8 +22,8 @@ The current implementation is intentionally small. It provides:
   `upper(string)`, `lower(string)`, `contains(haystack, needle)`, `int(value)`,
   `find(haystack, needle)`, `replace(source, pattern, replacement)`,
   `trim(value)`, and `slice(value, start, end)`;
-- conditional expressions (`if`/`else`), `while` loops, and `break`/
-  `continue` loop control;
+- conditional expressions (`if`/`else`), `while` and `for` loops, and
+  `break`/`continue` loop control;
 - local-file modules with flat or read-only namespaced imports, extensionless
   import paths, and configurable search directories; and
 - structured diagnostics with source excerpts.
@@ -67,10 +67,10 @@ identifier ::= [A-Za-z_] [A-Za-z0-9_]*
 ```
 
 Identifiers name bindings. The words `let`, `fn`, `true`, `false`, `if`,
-`else`, `while`, `return`, `break`, `continue`, and `use` are reserved
-keywords: the lexer produces dedicated keyword tokens for them, and they
-cannot be used as identifiers. The parser recognizes declarations from their
-keyword tokens rather than from token shape.
+`else`, `while`, `for`, `in`, `return`, `break`, `continue`, and `use` are
+reserved keywords: the lexer produces dedicated keyword tokens for them, and
+they cannot be used as identifiers. The parser recognizes declarations from
+their keyword tokens rather than from token shape.
 
 ### 2.5 String literals
 
@@ -106,12 +106,13 @@ literal syntax).
 
 ### 2.8 Punctuation
 
-The characters `( ) { } , ; = + - * / % ^ < > & | !` are significant. The
+The characters `( ) { } , ; = + - * / % ^ < > & | ! .` are significant. The
 two-character sequences `<=`, `>=`, `==`, and `!=` are tokenized as single
-operator tokens (§4.2). Any other ASCII punctuation character is tokenized as
-punctuation; one that no parser production accepts produces an error at that
-position. The two-character sequence `//` begins a comment (§2.3) and is not
-tokenized as punctuation.
+operator tokens (§4.2), and the two-character sequence `..` is tokenized as a
+range separator, legal only in a `for` header (§5.4). Any other ASCII
+punctuation character is tokenized as punctuation; one that no parser
+production accepts produces an error at that position. The two-character
+sequence `//` begins a comment (§2.3) and is not tokenized as punctuation.
 
 ### 2.9 Unrecognized characters
 
@@ -348,6 +349,43 @@ A single loop may run at most a fixed number of iterations (currently
 100,000); exceeding that bound aborts the loop with an error, so a condition
 that never becomes `false` cannot hang the interpreter.
 
+### 4.7 For loops
+
+```
+for-statement ::= "for" identifier "in" expression block
+                 | "for" identifier "in" expression ".." expression block
+```
+
+A `for` loop iterates over a sequence, binding the identifier to one element
+per iteration. Two forms are supported:
+
+- **Range form** `for i in start..end`: iterates over the integers from
+  `start` (inclusive) to `end` (exclusive), exactly `end - start` iterations
+  when both bounds are integers. Both bounds are evaluated once, before the
+  first iteration.
+- **String form** `for ch in value`: the expression must evaluate to a
+  string, and the loop iterates over its Unicode scalar values in order,
+  binding each as a one-character string.
+
+The two dot characters of `..` must be adjacent; the separator is legal only
+in a `for` header and is not a general expression operator.
+
+An empty range (`start == end`) or inverted range (`start > end`) performs
+zero iterations; it is not an error. Iterating any other value — integers,
+booleans, functions, modules — is a runtime error.
+
+Each iteration introduces a fresh lexical scope holding only the loop
+variable, nested inside the scope where the statement appears; the variable
+is not visible after the loop ends, and an outer binding of the same name is
+shadowed, not modified. Assigning to the loop variable inside the body
+affects only that iteration's binding; the next iteration binds a fresh
+value.
+
+Like `while`, a single `for` loop may run at most a fixed number of
+iterations (currently 100,000); exceeding that bound aborts the loop with an
+error. `break` and `continue` apply to `for` loops with the same meaning as
+in `while` loops (§5.4).
+
 ## 5. Statements and blocks
 
 ```
@@ -357,6 +395,7 @@ statement ::= declaration
             | return-statement
             | assignment
             | while-statement
+            | for-statement
             | expression-statement
             | block
 import    ::= "use" string-literal
@@ -408,10 +447,11 @@ break-statement    ::= "break" ";"
 continue-statement ::= "continue" ";"
 ```
 
-A `break` statement exits the innermost enclosing `while` loop immediately;
-execution resumes after the loop. A `continue` statement skips the rest of
-the loop body and proceeds directly to the loop's next condition check. Both
-evaluate to `unit`.
+A `break` statement exits the innermost enclosing `while` or `for` loop
+immediately; execution resumes after the loop. A `continue` statement skips
+the rest of the loop body and proceeds directly to the loop's next condition
+check (in a `for` loop, to the next element of the sequence). Both evaluate
+to `unit`.
 
 Both statements unwind through nested blocks and `if` bodies until they reach
 the innermost enclosing loop, which consumes them. A `break` or `continue`

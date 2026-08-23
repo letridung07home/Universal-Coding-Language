@@ -18,6 +18,10 @@ pub enum Keyword {
     Else,
     /// The `while` loop keyword.
     While,
+    /// The `for` loop keyword.
+    For,
+    /// The `in` loop-header keyword.
+    In,
     /// The `fn` function-declaration keyword.
     Function,
     /// The `return` statement keyword.
@@ -63,6 +67,8 @@ pub enum TokenKind {
     EqualEqual,
     /// A two-character operator: `!=`.
     NotEqual,
+    /// The two-dot range separator: `..`, used in `for` headers.
+    DotDot,
     /// A reserved word such as `let`.
     Keyword(Keyword),
     /// End of input marker.
@@ -183,6 +189,8 @@ impl<'src> Lexer<'src> {
                     "if" => TokenKind::Keyword(Keyword::If),
                     "else" => TokenKind::Keyword(Keyword::Else),
                     "while" => TokenKind::Keyword(Keyword::While),
+                    "for" => TokenKind::Keyword(Keyword::For),
+                    "in" => TokenKind::Keyword(Keyword::In),
                     "fn" => TokenKind::Keyword(Keyword::Function),
                     "return" => TokenKind::Keyword(Keyword::Return),
                     "break" => TokenKind::Keyword(Keyword::Break),
@@ -309,6 +317,10 @@ impl<'src> Lexer<'src> {
                         pos += 1;
                         TokenKind::NotEqual
                     }
+                    (b'.', Some(b'.')) => {
+                        pos += 1;
+                        TokenKind::DotDot
+                    }
                     _ => TokenKind::Punctuation(byte as char),
                 };
                 tokens.push(Token {
@@ -419,6 +431,51 @@ mod tests {
         assert_eq!(lexeme(&source, &tokens[0]), "let");
         assert_eq!(lexeme(&source, &tokens[1]), "answer");
         assert_eq!(lexeme(&source, &tokens[3]), "42");
+    }
+
+    #[test]
+    fn tokenizes_for_headers_and_range_separators() {
+        let source = SourceFile::new("main.ucl", "for i in 0..5 { i; };");
+        let tokens = Lexer::new(&source).tokenize(&mut DiagnosticSink::new());
+
+        let kinds: Vec<TokenKind> = tokens.iter().map(|token| token.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::Keyword(Keyword::For),
+                TokenKind::Ident,
+                TokenKind::Keyword(Keyword::In),
+                TokenKind::Integer,
+                TokenKind::DotDot,
+                TokenKind::Integer,
+                TokenKind::Punctuation('{'),
+                TokenKind::Ident,
+                TokenKind::Punctuation(';'),
+                TokenKind::Punctuation('}'),
+                TokenKind::Punctuation(';'),
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_single_dot_is_not_a_range_separator() {
+        // Member access keeps its single `.`; only two adjacent dots form
+        // the range separator.
+        let source = SourceFile::new("main.ucl", "math.one;");
+        let tokens = Lexer::new(&source).tokenize(&mut DiagnosticSink::new());
+
+        let kinds: Vec<TokenKind> = tokens.iter().map(|token| token.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::Ident,
+                TokenKind::Punctuation('.'),
+                TokenKind::Ident,
+                TokenKind::Punctuation(';'),
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]

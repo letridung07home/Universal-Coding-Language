@@ -7,7 +7,7 @@ provides an interpreter with a lexer, parser, evaluator, file-based modules,
 an interactive REPL, a command-line interface, and source-aware diagnostics.
 
 > [!NOTE]
-> UCL 1.9 follows the first stable release: the language, CLI, library API, and
+> UCL 1.10 follows the first stable release: the language, CLI, library API, and
 > error categories are covered by [compatibility guarantees](docs/guarantees.md).
 > It remains a deliberately small language — not a batteries-included
 > general-purpose scripting environment.
@@ -22,7 +22,8 @@ an interactive REPL, a command-line interface, and source-aware diagnostics.
   `find(haystack, needle)`, `replace(source, pattern, replacement)`,
   `trim(value)`, and `slice(value, start, end)`
 - Short-circuiting logical operators
-- `if`/`else` conditionals and `while` loops with `break` and `continue`
+- `if`/`else` conditionals, `while` and `for` loops, and `break` and
+  `continue` loop control
 - Functions: declarations, literals, closures, and recursion
 - `let` declarations and assignment
 - Blocks with lexical scoping
@@ -170,9 +171,10 @@ adds `break` and `continue` loop control statements, UCL 1.7 is an
 internal-quality release that reorganizes the evaluator's source layout and
 adds a CI dependency audit, UCL 1.8 makes shell scripting easier with
 inline `-e/--eval` programs, piped input through `-`, and the `int()`
-conversion built-in, and UCL 1.9 completes the string toolkit with the
-`find`, `replace`, `trim`, and `slice` built-ins. Future directions are
-sketched in the [project roadmap](docs/roadmap.md).
+conversion built-in, UCL 1.9 completes the string toolkit with the
+`find`, `replace`, `trim`, and `slice` built-ins, and UCL 1.10 adds `for`
+loops over numeric ranges (`for i in 0..5`) and strings. Future directions
+are sketched in the [project roadmap](docs/roadmap.md).
 
 ## Contributing
 

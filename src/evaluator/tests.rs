@@ -1114,6 +1114,139 @@ fn continue_skips_to_the_next_condition_check() {
 }
 
 #[test]
+fn for_loops_count_through_half_open_ranges() {
+    for (source, expected) in [
+        // 1 + 2 + 3 + 4
+        (
+            "let total = 0; for i in 1..5 { total = total + i; }; total;",
+            10,
+        ),
+        // An empty range runs zero iterations.
+        ("let n = 0; for i in 5..5 { n = n + 1; }; n;", 0),
+        // An inverted range also runs zero iterations.
+        ("let n = 0; for i in 3..1 { n = n + 1; }; n;", 0),
+        // Negative bounds work like any other integers.
+        (
+            "let total = 0; for i in -2..2 { total = total + i; }; total;",
+            -2,
+        ),
+        // Bounds are read once, before the first iteration.
+        (
+            "let end = 3; let seen = 0; for i in 0..end { end = 100; seen = seen + 1; }; seen;",
+            3,
+        ),
+    ] {
+        let (value, sink) = eval(source);
+        assert!(!sink.has_errors(), "unexpected error for `{source}`");
+        assert_eq!(value, Some(Value::Integer(expected)), "for `{source}`");
+    }
+}
+
+#[test]
+fn for_loops_iterate_strings_by_scalar_value() {
+    for (source, expected) in [
+        ("let n = 0; for ch in \"abc\" { n = n + 1; }; n;", 3),
+        // "hé" holds two scalar values.
+        ("let n = 0; for ch in \"hé\" { n = n + 1; }; n;", 2),
+        ("let n = 0; for ch in \"\" { n = n + 1; }; n;", 0),
+    ] {
+        let (value, sink) = eval(source);
+        assert!(!sink.has_errors(), "unexpected error for `{source}`");
+        assert_eq!(value, Some(Value::Integer(expected)), "for `{source}`");
+    }
+    // Each bound value is a one-character string.
+    let (value, sink) =
+        eval("let joined = \"\"; for ch in \"hé\" { joined = joined + ch; }; joined;");
+    assert!(!sink.has_errors());
+    assert_eq!(value, Some(Value::Str("hé".to_owned())));
+}
+
+#[test]
+fn for_loop_variables_are_body_scoped() {
+    // The variable is fresh each iteration and disappears with the loop;
+    // an outer binding of the same name survives untouched.
+    let (value, sink) = eval("let i = 99; for i in 0..3 { }; i;");
+    assert!(!sink.has_errors());
+    assert_eq!(value, Some(Value::Integer(99)));
+
+    // Assigning to the variable inside the body does not shift the
+    // sequence: the next iteration rebinds it.
+    let (value, sink) = eval(
+        "
+            let seen = 0;
+            for i in 0..4 {
+                i = 1000;
+                seen = seen + i;
+            };
+            seen;
+        ",
+    );
+    assert!(!sink.has_errors());
+    assert_eq!(value, Some(Value::Integer(4000)));
+}
+
+#[test]
+fn break_and_continue_work_in_for_loops() {
+    let source = "
+            let total = 0;
+            for i in 0..10 {
+                if i == 3 { continue; };
+                if i == 6 { break; };
+                total = total + i;
+            };
+        ";
+    let (value, sink) = eval(&format!("{source} total;"));
+    assert!(!sink.has_errors());
+    // 0 + 1 + 2 + 4 + 5
+    assert_eq!(value, Some(Value::Integer(12)));
+}
+
+#[test]
+fn nested_for_loops_bind_independent_variables() {
+    let source = "
+            let pairs = 0;
+            for a in 0..3 {
+                for b in 0..4 {
+                    pairs = pairs + 1;
+                };
+            };
+        ";
+    let (value, sink) = eval(&format!("{source} pairs;"));
+    assert!(!sink.has_errors());
+    assert_eq!(value, Some(Value::Integer(12)));
+}
+
+#[test]
+fn oversized_for_sequences_hit_the_iteration_cap() {
+    let (value, sink) = eval("let n = 0; for i in 0..999999999999 { n = n + 1; }; n;");
+    assert_eq!(value, None);
+    assert!(sink.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("loop exceeded the maximum number of iterations")
+    }),);
+}
+
+#[test]
+fn reports_for_iteration_type_errors() {
+    // Non-integer range bounds.
+    for source in [
+        "for i in \"a\"..\"b\" { };",
+        "for i in 0..true { };",
+        "for i in 42 { };",
+        "for ch in 42 { };",
+    ] {
+        let (value, sink) = eval(source);
+        assert_eq!(value, None, "expected an error for `{source}`");
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("`for`")),
+            "for `{source}`"
+        );
+    }
+}
+
+#[test]
 fn loop_signals_propagate_through_nested_loops_to_the_innermost_only() {
     // `break` inside the inner loop leaves the inner loop but the outer
     // one keeps running; `continue` in the outer loop skips its tail.

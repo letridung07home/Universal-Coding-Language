@@ -610,6 +610,105 @@ impl Evaluator {
                 }
                 Value::Unit
             }
+            AstKind::For {
+                variable,
+                start,
+                end,
+                body,
+            } => {
+                let Some(name) = source.slice(*variable) else {
+                    sink.emit(
+                        Diagnostic::error("`for` has an invalid variable span").at(node.span),
+                    );
+                    return Value::Unit;
+                };
+                // The iteration sequence is fixed before the first pass:
+                // range bounds are read once, and a string yields its
+                // scalar values as one-character strings.
+                let items = if let Some(start_expr) = start {
+                    let from_value = self.eval(start_expr, source, environment, sink, depth + 1);
+                    let to_value = self.eval(end, source, environment, sink, depth + 1);
+                    match (from_value, to_value) {
+                        (Value::Integer(from), Value::Integer(to)) => {
+                            // Half-open like `slice`; inverted and empty
+                            // ranges simply iterate zero times. Every
+                            // yielded value is below `to`, so no addition
+                            // can overflow.
+                            let count = ((to as i128 - from as i128).max(0)) as u64;
+                            // One extra item lets the executor distinguish a
+                            // completed loop from one cut off by the cap.
+                            let capped = count.min(MAX_LOOP_ITERATIONS + 1);
+                            Some(
+                                (0..capped)
+                                    .map(|step| Value::Integer(from + step as i64))
+                                    .collect::<Vec<Value>>(),
+                            )
+                        }
+                        (from_value, to_value) => {
+                            sink.emit(
+                                Diagnostic::error(format!(
+                                    "`for` range bounds must be integers, found `{}` and `{}`",
+                                    from_value.type_name(),
+                                    to_value.type_name()
+                                ))
+                                .at(node.span),
+                            );
+                            None
+                        }
+                    }
+                } else {
+                    let iterable = self.eval(end, source, environment, sink, depth + 1);
+                    match iterable {
+                        Value::Str(text) => Some(
+                            text.chars()
+                                .map(|character| Value::Str(character.to_string()))
+                                .take(MAX_LOOP_ITERATIONS as usize + 1)
+                                .collect(),
+                        ),
+                        other => {
+                            sink.emit(
+                                Diagnostic::error(format!(
+                                    "`for` cannot iterate over `{}`, expected a string or range",
+                                    other.type_name()
+                                ))
+                                .at(end.span),
+                            );
+                            None
+                        }
+                    }
+                };
+                let Some(items) = items else {
+                    return Value::Unit;
+                };
+                let mut iterations = 0u64;
+                for item in items {
+                    iterations += 1;
+                    if iterations > MAX_LOOP_ITERATIONS {
+                        sink.emit(
+                            Diagnostic::error("loop exceeded the maximum number of iterations")
+                                .at(node.span),
+                        );
+                        break;
+                    }
+                    environment.push_scope();
+                    environment.define(name, item);
+                    self.eval(body, source, environment, sink, depth + 1);
+                    // A `break` or `continue` from the body is consumed by
+                    // this loop; a pending `return` (or exhausted resources)
+                    // stops iteration without being consumed so it
+                    // propagates outward.
+                    let exit_for_break = self.take_loop_signal();
+                    environment.pop_scope();
+                    if self.has_pending_flow()
+                        || self.resource_exhausted.get()
+                        || sink.is_full()
+                        || exit_for_break
+                    {
+                        break;
+                    }
+                }
+                Value::Unit
+            }
             AstKind::Assignment { target, value } => {
                 let name = match &target.kind {
                     AstKind::Identifier => match source.slice(target.span) {

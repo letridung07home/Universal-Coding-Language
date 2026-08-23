@@ -482,6 +482,14 @@ fn runtime_errors_exit_with_code_one() {
 }
 
 #[test]
+fn for_loop_programs_run_end_to_end() {
+    let (stdout, _stderr, code) =
+        run_file_with_code("let total = 0; for i in 1..5 { total = total + i; }; total;");
+    assert_eq!(code, 0);
+    assert_eq!(stdout.trim(), "10");
+}
+
+#[test]
 fn lexical_errors_stop_the_pipeline() {
     // `π` is a lexical error; the parser must never run on the remaining
     // garbage, so no downstream syntax diagnostics may appear.

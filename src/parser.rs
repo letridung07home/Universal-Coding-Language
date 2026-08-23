@@ -120,6 +120,19 @@ pub enum AstKind {
         /// The block evaluated once per iteration.
         body: Box<AstNode>,
     },
+    /// A loop statement: `for name in iterable { ... }` or
+    /// `for name in start..end { ... }`.
+    For {
+        /// Span of the loop variable's identifier.
+        variable: Span,
+        /// The range start; present only in the `start..end` form.
+        start: Option<Box<AstNode>>,
+        /// The range end in the `start..end` form, or the whole iterable
+        /// expression otherwise.
+        end: Box<AstNode>,
+        /// The block evaluated once per iteration.
+        body: Box<AstNode>,
+    },
     /// A function declaration or literal: `fn name(parameters) { ... }` or
     /// `fn(parameters) { ... }`.
     ///
@@ -427,6 +440,12 @@ impl Parser {
         // unit and may not appear inside a larger expression.
         if self.check_keyword(Keyword::While) {
             return self.parse_while(sink);
+        }
+
+        // A `for` loop, likewise a statement: `for name in iterable { ... }`
+        // or `for name in start..end { ... }`.
+        if self.check_keyword(Keyword::For) {
+            return self.parse_for(sink);
         }
 
         let target = self.parse_expression(0, sink)?;
@@ -748,6 +767,47 @@ impl Parser {
         ))
     }
 
+    /// Parses a `for` loop statement.
+    ///
+    /// The `..` separator is legal only in a `for` header; it is consumed
+    /// here rather than becoming a general expression operator, which keeps
+    /// range expressions from needing precedence rules elsewhere.
+    fn parse_for(&mut self, sink: &mut DiagnosticSink) -> Option<AstNode> {
+        let start = self.advance().span.start;
+
+        if !self.check_kind(TokenKind::Ident) {
+            self.error_current("expected an identifier after `for`", sink);
+            return None;
+        }
+        let variable = self.advance().span;
+
+        if !self.check_keyword(Keyword::In) {
+            self.error_current("expected `in` after the loop variable", sink);
+            return None;
+        }
+        self.advance();
+
+        let first = self.parse_expression(0, sink)?;
+        let (start_expr, end_expr) = if self.consume_kind(TokenKind::DotDot) {
+            let bound = self.parse_expression(0, sink)?;
+            (Some(Box::new(first)), Box::new(bound))
+        } else {
+            (None, Box::new(first))
+        };
+
+        let body = self.parse_block(sink)?;
+
+        Some(AstNode::new(
+            Span::new(start, body.span.end),
+            AstKind::For {
+                variable,
+                start: start_expr,
+                end: end_expr,
+                body: Box::new(body),
+            },
+        ))
+    }
+
     /// Parses a block statement (`{ ... }`).
     ///
     /// A block introduces a new lexical scope and contains zero or more statements.
@@ -908,6 +968,17 @@ impl Parser {
     /// Otherwise returns false without consuming.
     fn consume_punctuation(&mut self, punctuation: char) -> bool {
         if self.check_punctuation(punctuation) {
+            self.advance();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// If the current token has the given kind, consumes it and returns true.
+    /// Otherwise returns false without consuming.
+    fn consume_kind(&mut self, kind: TokenKind) -> bool {
+        if self.check_kind(kind) {
             self.advance();
             true
         } else {
@@ -1295,6 +1366,61 @@ mod tests {
     #[test]
     fn while_is_not_an_expression_operand() {
         let (_ast, sink) = parse("1 + while x { 2; };");
+
+        assert!(sink.has_errors());
+    }
+
+    #[test]
+    fn parses_for_loops_over_ranges_and_strings() {
+        let (ast, sink) = parse("for i in 0..5 { i; };");
+        assert!(!sink.has_errors());
+        let AstKind::Program { statements } = ast.kind else {
+            panic!("expected program")
+        };
+        let AstKind::For {
+            variable,
+            start,
+            end,
+            body,
+        } = &statements[0].kind
+        else {
+            panic!("expected a for statement")
+        };
+        let source = SourceFile::new("test.ucl", "for i in 0..5 { i; };");
+        assert_eq!(source.slice(*variable), Some("i"));
+        assert!(start.is_some(), "a range header keeps its start bound");
+        assert!(matches!(end.kind, AstKind::Integer));
+        assert!(matches!(body.kind, AstKind::Block { .. }));
+
+        let (ast, sink) = parse("for ch in \"hé\" { ch; };");
+        assert!(!sink.has_errors());
+        let AstKind::Program { statements } = ast.kind else {
+            panic!("expected program")
+        };
+        let AstKind::For { start, end, .. } = &statements[0].kind else {
+            panic!("expected a for statement")
+        };
+        assert!(start.is_none(), "a plain iterable has no start bound");
+        assert!(matches!(end.kind, AstKind::StringLiteral));
+    }
+
+    #[test]
+    fn reports_malformed_for_headers() {
+        for source in [
+            "for 1 in 0..2 { };",
+            "for i 0..2 { };",
+            "for i in { };",
+            "for i in 0..;",
+            "for in 0..2 { };",
+        ] {
+            let (_ast, sink) = parse(source);
+            assert!(sink.has_errors(), "expected an error for `{source}`");
+        }
+    }
+
+    #[test]
+    fn for_is_not_an_expression_operand() {
+        let (_ast, sink) = parse("1 + for i in 0..2 { };");
 
         assert!(sink.has_errors());
     }
