@@ -20,15 +20,21 @@ jobs:
         include:
           - name: Linux x86_64
             os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
             platform: x86_64-linux
           - name: macOS aarch64
             os: macos-latest
+            target: aarch64-apple-darwin
             platform: aarch64-macos
           - name: macOS x86_64
-            os: macos-13
+            # GitHub's Intel runners (macos-13) are retired; the x86_64
+            # slice is built on Apple Silicon, whose toolchain links both.
+            os: macos-latest
+            target: x86_64-apple-darwin
             platform: x86_64-macos
           - name: Windows x86_64
             os: windows-latest
+            target: x86_64-pc-windows-msvc
             platform: x86_64-windows
     steps:
       - name: Check out repository
@@ -36,26 +42,28 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
       - name: Cache build artifacts
         uses: Swatinem/rust-cache@v2
 
       - name: Build release binary
-        run: cargo build --release --locked
+        run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Smoke test binary (Unix)
         if: runner.os != 'Windows'
-        run: ./target/release/ucl --help > /dev/null
+        run: ./target/${{ matrix.target }}/release/ucl --help > /dev/null
 
       - name: Smoke test binary (Windows)
         if: runner.os == 'Windows'
-        run: ./target/release/ucl.exe --help | Out-Null
+        run: ./target/${{ matrix.target }}/release/ucl.exe --help | Out-Null
 
       - name: Package release artifacts (Unix)
         if: runner.os != 'Windows'
         run: |
           mkdir -p dist/ucl-${{ matrix.platform }}
-          cp target/release/ucl dist/ucl-${{ matrix.platform }}/
+          cp target/${{ matrix.target }}/release/ucl dist/ucl-${{ matrix.platform }}/
           cp README.md LICENSE-MIT LICENSE-APACHE dist/ucl-${{ matrix.platform }}/
           tar -czf ucl-${{ matrix.platform }}.tar.gz -C dist ucl-${{ matrix.platform }}
           sha256sum ucl-${{ matrix.platform }}.tar.gz > ucl-${{ matrix.platform }}.tar.gz.sha256
@@ -65,7 +73,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "dist/ucl-${{ matrix.platform }}" | Out-Null
-          Copy-Item target/release/ucl.exe "dist/ucl-${{ matrix.platform }}/"
+          Copy-Item "target/${{ matrix.target }}/release/ucl.exe" "dist/ucl-${{ matrix.platform }}/"
           Copy-Item README.md, LICENSE-MIT, LICENSE-APACHE "dist/ucl-${{ matrix.platform }}/"
           tar -czf "ucl-${{ matrix.platform }}.tar.gz" -C dist "ucl-${{ matrix.platform }}"
           Compress-Archive -Path "dist/ucl-${{ matrix.platform }}" -DestinationPath "ucl-${{ matrix.platform }}.zip"
