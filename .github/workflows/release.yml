@@ -71,7 +71,7 @@ jobs:
           Compress-Archive -Path "dist/ucl-${{ matrix.platform }}" -DestinationPath "ucl-${{ matrix.platform }}.zip"
           foreach ($format in @("tar.gz", "zip")) {
             $hash = (Get-FileHash "ucl-${{ matrix.platform }}.$format" -Algorithm SHA256).Hash.ToLower()
-            "$hash  ucl-${{ matrix.platform }}.$format" | Out-File -Encoding asciiNoBOM "ucl-${{ matrix.platform }}.$format.sha256"
+            "$hash  ucl-${{ matrix.platform }}.$format" | Out-File -Encoding ascii "ucl-${{ matrix.platform }}.$format.sha256"
           }
 
       - name: Upload release artifacts
