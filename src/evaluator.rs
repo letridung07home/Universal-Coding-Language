@@ -843,6 +843,34 @@ impl Evaluator {
                         return Value::Unit;
                     }
                 };
+                // Fast path: `name = name + <pure expression>` appends to the
+                // existing string in place instead of rebuilding it from a
+                // fresh copy on every iteration. This keeps accumulation loops
+                // such as `acc = acc + "!"` linear in total work.
+                if let AstKind::Binary {
+                    operator: BinaryOperator::Add,
+                    left,
+                    right,
+                } = &value.kind
+                {
+                    if matches!(left.kind, AstKind::Identifier)
+                        && source.slice(left.span) == Some(name.as_str())
+                        && !Self::may_mutate_bindings(right)
+                        && environment.lookup(&name).is_some()
+                    {
+                        if let Some(value) = self.try_append_in_place(
+                            &name,
+                            value.span,
+                            right,
+                            source,
+                            environment,
+                            sink,
+                            depth,
+                        ) {
+                            return value;
+                        }
+                    }
+                }
                 let value = self.eval(value, source, environment, sink, depth + 1);
                 if !environment.assign(&name, value.clone()) {
                     sink.emit(
@@ -1067,6 +1095,83 @@ impl Evaluator {
         );
         false
     }
+
+    /// Returns whether evaluating `node` could reassign a binding or call a
+    /// function (which may reassign bindings indirectly). Used to decide
+    /// whether an append-style assignment may run in place.
+    fn may_mutate_bindings(node: &AstNode) -> bool {
+        match &node.kind {
+            AstKind::Call { .. } | AstKind::Assignment { .. } | AstKind::Use { .. } => true,
+            AstKind::Program { statements } | AstKind::Block { statements } => {
+                statements.iter().any(Self::may_mutate_bindings)
+            }
+            AstKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                Self::may_mutate_bindings(condition)
+                    || Self::may_mutate_bindings(then_branch)
+                    || else_branch
+                        .as_deref()
+                        .is_some_and(Self::may_mutate_bindings)
+            }
+            AstKind::While { condition, body } => {
+                Self::may_mutate_bindings(condition) || Self::may_mutate_bindings(body)
+            }
+            AstKind::Unary { operand, .. } => Self::may_mutate_bindings(operand),
+            AstKind::Binary { left, right, .. } => {
+                Self::may_mutate_bindings(left) || Self::may_mutate_bindings(right)
+            }
+            AstKind::Group { expression } => Self::may_mutate_bindings(expression),
+            _ => false,
+        }
+    }
+
+    /// Appends `right`'s string value to the existing `name` binding in place.
+    ///
+    /// The caller has already established that the binding exists and that
+    /// `name = name + right` is being evaluated with a mutation-free `right`.
+    /// Returns `None` when the operands are not both strings so the caller
+    /// falls back to the general assignment path; re-evaluating `right` there
+    /// is side-effect free by construction.
+    #[allow(clippy::too_many_arguments)]
+    fn try_append_in_place(
+        &self,
+        name: &str,
+        expression_span: Span,
+        right: &AstNode,
+        source: &SourceFile,
+        environment: &mut Environment,
+        sink: &mut DiagnosticSink,
+        depth: usize,
+    ) -> Option<Value> {
+        let suffix = self.eval(right, source, environment, sink, depth + 1);
+        let slot = environment
+            .scopes
+            .iter_mut()
+            .rev()
+            .find_map(|scope| scope.get_mut(name))?;
+        let (Value::Str(existing), Value::Str(appendage)) = (&*slot, &suffix) else {
+            // Not a string append (integers, mismatched types, or a
+            // short-circuited operand): defer to the general assignment path,
+            // whose diagnostics and semantics apply unchanged. Re-evaluating
+            // `right` there is safe because it cannot mutate bindings.
+            return None;
+        };
+        let length = existing.len().saturating_add(appendage.len());
+        if !self.check_string_size(length, expression_span, sink) {
+            return Some(Value::Unit);
+        }
+        let Value::Str(existing) = slot else {
+            unreachable!("both operands were matched as strings above")
+        };
+        let Value::Str(appendage) = suffix else {
+            unreachable!("both operands were matched as strings above")
+        };
+        existing.push_str(&appendage);
+        Some(Value::Str(existing.clone()))
+    }
 }
 
 impl Default for Evaluator {
@@ -1180,6 +1285,77 @@ mod tests {
     }
 
     #[test]
+    fn append_assignment_accumulates_strings() {
+        let (value, sink) = eval(r#"let s = "a"; s = s + "b"; s;"#);
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Str("ab".to_owned())));
+    }
+
+    #[test]
+    fn append_assignment_updates_the_innermost_binding() {
+        // The in-place append must target the shadowing binding, leaving the
+        // outer one untouched.
+        let (value, sink) = eval(r#"let s = "a"; { let s = "b"; s = s + "c"; }; s;"#);
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Str("a".to_owned())));
+
+        let (value, sink) = eval(r#"let s = ""; { let s = "b"; s = s + "c"; }; len(s);"#);
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Integer(0)));
+    }
+
+    #[test]
+    fn append_assignment_in_a_loop_accumulates() {
+        let (value, sink) =
+            eval(r#"let s = ""; let i = 0; while i < 3 { s = s + "?"; i = i + 1; }; len(s);"#);
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Integer(3)));
+    }
+
+    #[test]
+    fn append_assignment_reports_type_mismatch_like_general_form() {
+        let (_value, sink) = eval(r#"let n = 1; n = n + "a";"#);
+        assert!(sink.has_errors());
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("cannot apply `+`"))
+        );
+    }
+
+    #[test]
+    fn append_assignment_to_undefined_variable_still_reported() {
+        let (_value, sink) = eval(r#"x = x + "a";"#);
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("undefined variable `x`"))
+        );
+    }
+
+    #[test]
+    fn regression_append_loop_with_inert_counter_terminates() {
+        // Fuzz-found inputs: the counter never advances, so the loop runs
+        // until its iteration cap. These must terminate with the documented
+        // loop-limit error rather than hanging or exhausting memory.
+        for source in [
+            r#"let i = 0; let acc = ""; while i < 5 { acc = acc + "!";  i + 1; }; acc;"#,
+            r#"let i = 0; let acc = ""; while i < 5 { acc = acc + "!"; i = i + 0; }; acc;"#,
+        ] {
+            let started = std::time::Instant::now();
+            let (value, sink) = eval(source);
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(10),
+                "evaluation of `{source}` should be bounded"
+            );
+            assert!(sink.iter().any(|diagnostic| {
+                diagnostic
+                    .message
+                    .contains("loop exceeded the maximum number of iterations")
+            }));
+            assert_eq!(value, None);
+        }
+    }
+
+    #[test]
     fn blocks_introduce_new_scopes() {
         let (value, sink) = eval("let x = 5; { let x = 10; }; x;");
         assert!(!sink.has_errors());
@@ -1241,8 +1417,6 @@ mod tests {
     fn rejects_excessive_evaluation_nesting() {
         // Build a deeply nested AST directly, bypassing the parser's own depth
         // limit, to exercise the evaluator's independent guard. The test runs
-        // on a thread with a generous stack so that reaching the guard never
-        // depends on how large one evaluator frame happens to be.
         let harness = std::thread::Builder::new()
             .stack_size(64 * 1024 * 1024)
             .spawn(|| {

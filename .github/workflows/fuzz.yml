@@ -50,7 +50,18 @@ jobs:
           fi
 
       - name: Fuzz ${{ matrix.target }} (${{ steps.budget.outputs.seconds }} seconds)
+        # Bounded programs can still generate heavy allocator churn (for
+        # example loops that rebuild an accumulating string every iteration);
+        # under ASan the default quarantine (256 MB) plus per-allocation
+        # metadata made such inputs reach ~3 GB resident each. A small
+        # quarantine keeps freed pages recyclable so resident memory tracks
+        # live heap instead of churn.
+        env:
+          ASAN_OPTIONS: quarantine_size_mb=8:malloc_context_size=16
         # Four workers saturate the runner's CPU cores: same wall-clock
         # budget as a single-worker run, roughly four times the executions.
-        run: cargo +nightly fuzz run ${{ matrix.target }} -- -jobs=4 -workers=4 -max_total_time=${{ steps.budget.outputs.seconds }}
+        # Explicit resource limits head off libFuzzer's tighter defaults
+        # (2048 MB RSS, no per-run timeout) tripping on pathological-but-
+        # bounded inputs rather than genuine bugs.
+        run: cargo +nightly fuzz run ${{ matrix.target }} -- -jobs=4 -workers=4 -max_total_time=${{ steps.budget.outputs.seconds }} -rss_limit_mb=4096 -malloc_limit_mb=1024 -timeout=25
         working-directory: fuzz
