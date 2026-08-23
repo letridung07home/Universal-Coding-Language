@@ -18,7 +18,11 @@ const PROMPT: &str = ">>> ";
 const CONTINUATION_PROMPT: &str = "... ";
 
 /// Runs the REPL until end of input or a quit command.
-pub fn run() -> io::Result<()> {
+///
+/// `search_paths` holds module search directories from `-p/--path` flags;
+/// the process environment's `UCL_PATH` entries are appended here so both
+/// entry points share one configuration order. The paths survive `:reset`.
+pub fn run(search_paths: &[String]) -> io::Result<()> {
     let stdin = io::stdin();
     let mut stdout = io::stdout();
 
@@ -28,7 +32,7 @@ pub fn run() -> io::Result<()> {
     );
 
     let evaluator = Evaluator::new();
-    let mut environment = Environment::new();
+    let mut environment = fresh_environment(search_paths);
 
     loop {
         write!(stdout, "{PROMPT}")?;
@@ -39,7 +43,7 @@ pub fn run() -> io::Result<()> {
             None => break,
         };
         if is_meta_command(&first_line) {
-            if !handle_meta_command(first_line.trim(), &mut environment) {
+            if !handle_meta_command(first_line.trim(), &mut environment, search_paths) {
                 break;
             }
             continue;
@@ -118,8 +122,27 @@ fn is_meta_command(line: &str) -> bool {
     line.trim_start().starts_with(':')
 }
 
+/// Builds a fresh session environment with the given module search paths
+/// plus any `UCL_PATH` directories from the process environment.
+fn fresh_environment(search_paths: &[String]) -> Environment {
+    let mut environment = Environment::new();
+    for dir in search_paths {
+        environment.add_search_path(dir);
+    }
+    if let Some(value) = std::env::var_os("UCL_PATH") {
+        for dir in std::env::split_paths(&value) {
+            environment.add_search_path(dir.display().to_string());
+        }
+    }
+    environment
+}
+
 /// Handles a meta command. Returns false when the session should end.
-fn handle_meta_command(command: &str, environment: &mut Environment) -> bool {
+fn handle_meta_command(
+    command: &str,
+    environment: &mut Environment,
+    search_paths: &[String],
+) -> bool {
     match command.trim() {
         ":help" => {
             println!(":help   show this help");
@@ -127,7 +150,7 @@ fn handle_meta_command(command: &str, environment: &mut Environment) -> bool {
             println!(":quit   exit the interpreter (also Ctrl-D)");
         }
         ":reset" => {
-            *environment = Environment::new();
+            *environment = fresh_environment(search_paths);
             println!("session reset");
         }
         ":quit" | ":exit" => return false,

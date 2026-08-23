@@ -2,6 +2,30 @@
 
 All notable changes to UCL are documented here.
 
+## 1.5.0 - 2026-08-23
+
+### Added
+
+- Extensionless imports: `use "math";` and `use "math" as math;` resolve
+  `math.ucl` when no file named exactly `math` exists. Imports written with
+  an explicit `.ucl` extension behave exactly as before.
+- Module search directories, consulted when an import cannot be found next
+  to the importing file:
+  - the `ucl` binary accepts repeatable `-p/--path <dir>` options;
+  - `UCL_PATH` directories (separated by the platform path list separator)
+    are consulted after any `-p/--path` flags; and
+  - library consumers configure paths through the new public
+    `Environment::add_search_path`. The REPL applies both sources and keeps
+    them across `:reset`.
+- Not-found import errors now list every candidate location that was tried.
+- The public API change is additive: default resolution is unchanged when no
+  search paths are configured.
+
+### Fixed
+
+- Import resolution now reports missing modules at resolution time instead of
+  attempting a filesystem read of a nonexistent candidate path.
+
 ## 1.4.0 - 2026-08-23
 
 ### Added

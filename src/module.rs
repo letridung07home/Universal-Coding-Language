@@ -29,12 +29,26 @@ pub(crate) struct ModuleState {
     /// Modules currently being evaluated, innermost last. Used to detect
     /// and report circular imports.
     loading: Vec<PathBuf>,
+    /// Directories consulted when an import cannot be found next to the
+    /// importing file, in configuration order. Populated through the public
+    /// [`Environment`](crate::evaluator::Environment) search-path API.
+    search_paths: Vec<PathBuf>,
 }
 
 impl ModuleState {
     /// Returns completed exports when the module at `path` has already run.
     pub(crate) fn exports(&self, path: &Path) -> Option<ModuleValue> {
         self.loaded.get(path).cloned()
+    }
+
+    /// Appends a directory to the end of the module search path.
+    pub(crate) fn push_search_path(&mut self, path: PathBuf) {
+        self.search_paths.push(path);
+    }
+
+    /// Returns the session's module search directories in lookup order.
+    pub(crate) fn search_paths(&self) -> &[PathBuf] {
+        &self.search_paths
     }
 
     /// Returns true when this module's exports were already merged through a
@@ -73,11 +87,22 @@ impl ModuleState {
     }
 }
 
-/// Resolves a decoded module path relative to the importing file's location.
+/// Resolves a decoded module path against the importing file's location and
+/// the session's search directories.
 ///
-/// Falls back to the process working directory when the source has no parent
-/// directory, which keeps interactive front ends such as a REPL working.
-fn resolve_module_path(source: &SourceFile, raw: &str) -> Result<PathBuf, String> {
+/// Candidates are tried in a fixed order: the importing file's directory
+/// first (so existing programs keep resolving exactly as before), then each
+/// configured search directory. Every location is tried as written and, when
+/// it has no `.ucl` extension, once more with the extension added; the first
+/// existing file wins. Absolute import paths replace the base directory
+/// entirely, so they bypass the search path.
+///
+/// When no candidate exists, the error lists every location that was tried.
+fn resolve_module_path(
+    source: &SourceFile,
+    raw: &str,
+    search_paths: &[PathBuf],
+) -> Result<PathBuf, String> {
     if raw.is_empty() {
         return Err("module path is empty".to_owned());
     }
@@ -85,12 +110,35 @@ fn resolve_module_path(source: &SourceFile, raw: &str) -> Result<PathBuf, String
     let name = source.name();
     let base = Path::new(name)
         .parent()
-        .filter(|parent| !parent.as_os_str().is_empty());
-    let joined = base.map_or_else(|| PathBuf::from(raw), |base| base.join(raw));
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map_or_else(PathBuf::new, Path::to_path_buf);
 
-    // Best effort: keep the unresolved path when canonicalization fails so
-    // the later read produces a precise "cannot read module" error instead.
-    Ok(joined.canonicalize().unwrap_or(joined))
+    let mut tried = Vec::new();
+    for directory in std::iter::once(&base).chain(search_paths) {
+        let direct = directory.join(raw);
+        // Best effort: keep the unresolved path when canonicalization fails
+        // so the later read produces a precise error instead.
+        if let Ok(canonical) = direct.canonicalize() {
+            return Ok(canonical);
+        }
+        tried.push(direct.display().to_string());
+        if direct.extension().is_none() {
+            let extended = direct.with_extension("ucl");
+            if let Ok(canonical) = extended.canonicalize() {
+                return Ok(canonical);
+            }
+            tried.push(extended.display().to_string());
+        }
+    }
+
+    Err(format!(
+        "cannot read module `{raw}`: none of these locations exist:\n{}",
+        tried
+            .iter()
+            .map(|path| format!("  - {path}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    ))
 }
 
 /// Reports that loading `module_path` failed by summarizing its first
@@ -138,13 +186,14 @@ impl Evaluator {
                 .and_then(|text| text.strip_suffix('"'))
                 .unwrap_or(raw),
         );
-        let module_path = match resolve_module_path(source, &decoded) {
-            Ok(path) => path,
-            Err(message) => {
-                sink.emit(Diagnostic::error(message).at(*path_span));
-                return Value::Unit;
-            }
-        };
+        let module_path =
+            match resolve_module_path(source, &decoded, environment.modules.search_paths()) {
+                Ok(path) => path,
+                Err(message) => {
+                    sink.emit(Diagnostic::error(message).at(*path_span));
+                    return Value::Unit;
+                }
+            };
 
         if environment.modules.is_loading(&module_path) {
             sink.emit(
@@ -297,13 +346,28 @@ mod module_tests {
         /// Evaluates `source_text` as a program stored in the scratch
         /// directory under the given name.
         fn run(&self, file_name: &str, source_text: &str) -> (Option<Value>, DiagnosticSink) {
+            self.run_with_search_paths(file_name, source_text, &[])
+        }
+
+        /// Like [`Self::run`], but configures additional session module
+        /// search directories before evaluation.
+        fn run_with_search_paths(
+            &self,
+            file_name: &str,
+            source_text: &str,
+            search_paths: &[&Path],
+        ) -> (Option<Value>, DiagnosticSink) {
             let path = self.write(file_name, source_text);
             let source = SourceFile::new(path.display().to_string(), source_text);
             let mut sink = DiagnosticSink::new();
             let tokens = Lexer::new(&source).tokenize(&mut sink);
             let value = match Parser::new(tokens).parse(&mut sink) {
                 Some(ast) => {
-                    Evaluator::new().evaluate_in(&mut Environment::new(), &ast, &source, &mut sink)
+                    let mut environment = Environment::new();
+                    for directory in search_paths {
+                        environment.add_search_path(directory);
+                    }
+                    Evaluator::new().evaluate_in(&mut environment, &ast, &source, &mut sink)
                 }
                 None => None,
             };
@@ -523,5 +587,104 @@ mod module_tests {
                 .message
                 .contains("cannot access member `answer` on value of type `integer`")
         }));
+    }
+
+    #[test]
+    fn extensionless_imports_resolve_the_ucl_file() {
+        let dir = TempDir::new();
+        dir.write("math.ucl", "fn double(n) { n * 2; };");
+        let (value, sink) =
+            dir.run_with_search_paths("main.ucl", "use \"math\" as m; m.double(21);", &[]);
+
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Integer(42)));
+    }
+
+    #[test]
+    fn search_paths_are_consulted_when_the_relative_lookup_fails() {
+        let main_dir = TempDir::new();
+        let library_dir = TempDir::new();
+        library_dir.write("helper.ucl", "let answer = 42;");
+        let (value, sink) = main_dir.run_with_search_paths(
+            "main.ucl",
+            "use \"helper\" as h; h.answer;",
+            &[&library_dir.0],
+        );
+
+        assert!(
+            !sink.has_errors(),
+            "{:?}",
+            sink.iter().map(|d| d.message.clone()).collect::<Vec<_>>()
+        );
+        assert_eq!(value, Some(Value::Integer(42)));
+    }
+
+    #[test]
+    fn the_importing_directory_takes_precedence_over_search_paths() {
+        let main_dir = TempDir::new();
+        let shadow_dir = TempDir::new();
+        // Both directories define `pick`; only the one next to the importer
+        // may be loaded.
+        main_dir.write("pick.ucl", "let who = \"local\";");
+        shadow_dir.write("pick.ucl", "let who = \"searched\";");
+        let (value, sink) =
+            main_dir.run_with_search_paths("main.ucl", "use \"pick\"; who;", &[&shadow_dir.0]);
+
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Str("local".to_owned())));
+    }
+
+    #[test]
+    fn transitive_imports_resolve_through_search_paths() {
+        let main_dir = TempDir::new();
+        let library_dir = TempDir::new();
+        library_dir.write("leaf.ucl", "fn seven() { 7; };");
+        // `middle` lives next to the importer but imports through a search
+        // path; its own import resolves relative to its own directory, which
+        // is not where `leaf` lives.
+        main_dir.write("middle.ucl", "use \"leaf\"; let value = seven();");
+        let (value, sink) =
+            main_dir.run_with_search_paths("main.ucl", "use \"middle\"; value;", &[&library_dir.0]);
+
+        assert!(!sink.has_errors(), "for a module in the search path");
+        assert_eq!(value, Some(Value::Integer(7)));
+    }
+
+    #[test]
+    fn resolution_forms_share_one_cached_evaluation() {
+        let dir = TempDir::new();
+        dir.write("once.ucl", "let x = 21;");
+        // If the two forms resolved to different modules, the second flat
+        // import would collide with bindings from the first.
+        let (value, sink) = dir.run("main.ucl", "use \"once\";\nuse \"once.ucl\";\nx + 1;");
+
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Integer(22)));
+    }
+
+    #[test]
+    fn missing_imports_list_every_tried_location() {
+        let main_dir = TempDir::new();
+        let library_dir = TempDir::new();
+        let (value, sink) =
+            main_dir.run_with_search_paths("main.ucl", "use \"nowhere\";", &[&library_dir.0]);
+
+        assert!(sink.has_errors());
+        let message = sink
+            .iter()
+            .map(|diagnostic| diagnostic.message.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            message.contains("none of these locations exist"),
+            "{message}"
+        );
+        for expected in ["nowhere", "nowhere.ucl"] {
+            assert!(
+                message.contains(expected),
+                "`{expected}` must be listed: {message}"
+            );
+        }
+        assert_eq!(value, None);
     }
 }

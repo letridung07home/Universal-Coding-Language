@@ -256,6 +256,16 @@ impl Environment {
         std::mem::replace(&mut self.scopes, vec![HashMap::new()])
     }
 
+    /// Appends a directory to the session's module search path.
+    ///
+    /// `use` statements consult these directories, in insertion order, when a
+    /// module cannot be found next to the importing file. Adding paths after
+    /// modules have already been evaluated is allowed but only affects later
+    /// lookups; completed exports stay cached for the session.
+    pub fn add_search_path(&mut self, path: impl Into<std::path::PathBuf>) {
+        self.modules.push_search_path(path.into());
+    }
+
     /// Restores a scope stack saved by [`Environment::isolate_globals`] and
     /// returns the bindings of the (replaced) global scope.
     pub(crate) fn restore_globals(

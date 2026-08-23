@@ -57,7 +57,12 @@ than scheduled:
       (`module.name`) alongside legacy flat imports
 - [x] Broader platform coverage for release artifacts (macOS and Windows
       joined Linux, with CI coverage for each supported OS)
-- A richer module/package story beyond local files
+- [x] A richer module story beyond local files: extensionless imports and
+      configurable search directories (`-p/--path`, `UCL_PATH`)
+
+Every item on this roadmap is now complete. Future work starts from a blank
+page; the language, CLI, library API, and error categories remain covered by
+the compatibility guarantees.
 
 Each of these is additive; none would require a breaking change. UCL 1.1 adds
 a deterministic 8 MiB string-value limit to keep repeated concatenation from
@@ -67,4 +72,6 @@ UCL 1.3 expands the built-in prelude with value conversion, type inspection,
 and string helpers, all sharing the result-echo rendering through one
 implementation. UCL 1.4 broadens release artifacts to macOS (Apple Silicon
 and Intel) and Windows x86_64, with CI running the test suite on each
-supported platform.
+supported platform. UCL 1.5 completes the roadmap with extensionless import
+paths and configurable module search directories, keeping imports next to
+the importing file as the highest-priority resolution.

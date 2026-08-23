@@ -21,7 +21,8 @@ The current implementation is intentionally small. It provides:
 - a built-in prelude: `len(string)`, `str(value)`, `type(value)`,
   `upper(string)`, `lower(string)`, and `contains(haystack, needle)`;
 - conditional expressions (`if`/`else`) and `while` loops;
-- local-file modules with flat or read-only namespaced imports; and
+- local-file modules with flat or read-only namespaced imports, extensionless
+  import paths, and configurable search directories; and
 - structured diagnostics with source excerpts.
 
 ## 2. Lexical structure
@@ -401,9 +402,18 @@ member-expression ::= postfix-expression "." identifier
 
 A `use` statement imports a module from another source file. It may appear
 only at the top level of a program; placing one inside a block or function
-body is an error. The path is a string literal interpreted relative to the
-directory of the importing file (in an interactive session, relative to the
-process's working directory).
+body is an error.
+
+The path string is resolved by trying candidate locations in a fixed order:
+the directory of the importing file first (in an interactive session, the
+process's working directory), then each configured *search directory* in
+order. At every location the path is tried as written and, when it has no
+`.ucl` extension, once more with `.ucl` appended; the first existing file
+wins. Absolute import paths ignore the search directories entirely. Search
+directories come from the session configuration: the `ucl` binary accepts
+repeatable `-p/--path <dir>` options and consults `UCL_PATH` directories
+(separated by the platform path list separator) after any `-p/--path`
+options. When no candidate exists, the error lists every location tried.
 
 The legacy form, `use "path.ucl";`, is a *flat import*: every top-level
 binding of the completed module — including names it imported itself — is

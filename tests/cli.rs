@@ -185,6 +185,71 @@ fn reports_new_builtin_errors_without_stdout() {
 }
 
 #[test]
+fn search_path_flag_resolves_imports() {
+    let app = temp_dir();
+    let lib = temp_dir();
+    fs::create_dir_all(&app).expect("create app dir");
+    fs::create_dir_all(&lib).expect("create lib dir");
+    fs::write(lib.join("math.ucl"), "fn double(n) { n * 2; };").expect("write module");
+    let main = app.join("main.ucl");
+    fs::write(&main, "use \"math\" as m; m.double(21);").expect("write main");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_ucl"))
+        .arg("-p")
+        .arg(&lib)
+        .arg(&main)
+        .output()
+        .expect("run the ucl binary");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "42\n");
+
+    // Without the flag the import cannot resolve.
+    let output = Command::new(env!("CARGO_BIN_EXE_ucl"))
+        .arg(&main)
+        .env_remove("UCL_PATH")
+        .output()
+        .expect("run the ucl binary");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("none of these locations exist"), "{stderr}");
+
+    let _ = fs::remove_dir_all(app);
+    let _ = fs::remove_dir_all(lib);
+}
+
+#[test]
+fn ucl_path_environment_resolves_imports() {
+    let app = temp_dir();
+    let lib = temp_dir();
+    fs::create_dir_all(&app).expect("create app dir");
+    fs::create_dir_all(&lib).expect("create lib dir");
+    fs::write(lib.join("helper.ucl"), "let answer = 40;").expect("write module");
+    let main = app.join("main.ucl");
+    fs::write(&main, "use \"helper\"; answer + 2;").expect("write main");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_ucl"))
+        .arg(&main)
+        .env("UCL_PATH", &lib)
+        .output()
+        .expect("run the ucl binary");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "42\n");
+
+    let _ = fs::remove_dir_all(app);
+    let _ = fs::remove_dir_all(lib);
+}
+
+#[test]
 fn reports_function_arity_errors_with_an_excerpt() {
     let (stdout, stderr, success) = run("fn identity(value) { value; }; identity();");
 
@@ -290,7 +355,7 @@ fn syntax_errors_stop_the_pipeline_before_evaluation() {
 fn help_flag_prints_usage_and_exits_zero() {
     let (stdout, stderr, code) = run_args(&["--help"]);
     assert_eq!(code, 0);
-    assert!(stdout.contains("usage: ucl [<file>]"));
+    assert!(stdout.contains("usage: ucl [-p <dir>]... [<file>]"));
     assert!(stderr.is_empty());
 }
 
@@ -298,7 +363,7 @@ fn help_flag_prints_usage_and_exits_zero() {
 fn short_help_flag_is_equivalent() {
     let (stdout, _stderr, code) = run_args(&["-h"]);
     assert_eq!(code, 0);
-    assert!(stdout.contains("usage: ucl [<file>]"));
+    assert!(stdout.contains("usage: ucl [-p <dir>]... [<file>]"));
 }
 
 #[test]
@@ -314,7 +379,7 @@ fn unknown_option_is_a_usage_error() {
     let (_stdout, stderr, code) = run_args(&["--bogus"]);
     assert_eq!(code, 2);
     assert!(stderr.contains("unknown option `--bogus`"));
-    assert!(stderr.contains("usage: ucl [<file>]"));
+    assert!(stderr.contains("usage: ucl [-p <dir>]... [<file>]"));
 }
 
 #[test]
