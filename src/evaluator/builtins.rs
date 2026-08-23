@@ -21,6 +21,16 @@ pub enum BuiltinFunction {
     Contains,
     /// Parses a string as a signed 64-bit integer; integers pass through.
     Int,
+    /// Returns the scalar-value index of the first occurrence of a substring,
+    /// or -1 when it does not appear.
+    Find,
+    /// Returns a copy of a string with every occurrence of a substring
+    /// replaced by another string.
+    Replace,
+    /// Returns a copy of a string with leading and trailing whitespace removed.
+    Trim,
+    /// Returns the substring between two scalar-value indices.
+    Slice,
 }
 
 impl BuiltinFunction {
@@ -34,6 +44,10 @@ impl BuiltinFunction {
             Self::Lower => "lower",
             Self::Contains => "contains",
             Self::Int => "int",
+            Self::Find => "find",
+            Self::Replace => "replace",
+            Self::Trim => "trim",
+            Self::Slice => "slice",
         }
     }
 
@@ -47,6 +61,10 @@ impl BuiltinFunction {
             Self::Lower,
             Self::Contains,
             Self::Int,
+            Self::Find,
+            Self::Replace,
+            Self::Trim,
+            Self::Slice,
         ]
         .into_iter()
     }

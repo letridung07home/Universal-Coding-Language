@@ -201,7 +201,15 @@ fn str_renders_unit_as_its_type_name() {
 
 #[test]
 fn reports_new_builtin_errors_without_stdout() {
-    for source in ["upper(1);", "lower(true);", "contains(1, \"a\");"] {
+    for source in [
+        "upper(1);",
+        "lower(true);",
+        "contains(1, \"a\");",
+        "find(\"a\", 1);",
+        "replace(1, \"b\", \"c\");",
+        "trim(1);",
+        "slice(1, 0, 1);",
+    ] {
         let (stdout, stderr, success) = run(source);
         assert!(!success, "for `{source}`");
         assert!(stdout.is_empty(), "for `{source}`");

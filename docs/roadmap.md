@@ -68,7 +68,8 @@ the compatibility guarantees.
 
 Sketched rather than scheduled:
 
-- [ ] More string manipulation built-ins (`find`, `replace`, `trim`, slicing)
+- [x] More string manipulation built-ins (`find`, `replace`, `trim`, slicing)
+      (UCL 1.9)
 - [ ] A `for` loop iterating over strings or numeric ranges
 - [ ] Aggregate values such as lists
 - [ ] A source formatter (`ucl fmt`)

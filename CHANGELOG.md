@@ -2,6 +2,21 @@
 
 All notable changes to UCL are documented here.
 
+## 1.9.0 - 2026-08-23
+
+### Added
+
+- Four string built-ins, completing the string toolkit:
+  - `find(haystack, needle)` returns the scalar-value index of the first
+    occurrence of `needle`, or `-1` when it does not occur.
+  - `replace(source, pattern, replacement)` returns a copy of `source` with
+    every occurrence of `pattern` replaced; an empty pattern is a runtime
+    error.
+  - `trim(value)` strips leading and trailing whitespace.
+  - `slice(value, start, end)` extracts the substring between scalar-value
+    indices with strict bounds checking: negative, out-of-range, or inverted
+    indices are runtime errors.
+
 ## 1.8.0 - 2026-08-23
 
 ### Added

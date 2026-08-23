@@ -826,6 +826,142 @@ impl Evaluator {
                     }
                 }
             }
+            BuiltinFunction::Find => {
+                if !Self::check_arity(BuiltinFunction::Find.name(), values, 2, span, sink) {
+                    return Value::Unit;
+                }
+                let (haystack, needle) = (&values[0], &values[1]);
+                if let Value::Str(haystack) = haystack {
+                    if let Value::Str(needle) = needle {
+                        // `str::find` reports byte offsets; convert to the
+                        // scalar-value indices every other built-in uses.
+                        return Value::Integer(match haystack.find(needle.as_str()) {
+                            Some(byte) => haystack[..byte].chars().count() as i64,
+                            None => -1,
+                        });
+                    }
+                    sink.emit(
+                        Diagnostic::error(format!(
+                            "`find` expects a string needle, found `{}`",
+                            needle.type_name()
+                        ))
+                        .at(span),
+                    );
+                    return Value::Unit;
+                }
+                sink.emit(
+                    Diagnostic::error(format!(
+                        "`find` expects a string haystack, found `{}`",
+                        haystack.type_name()
+                    ))
+                    .at(span),
+                );
+                Value::Unit
+            }
+            BuiltinFunction::Replace => {
+                if !Self::check_arity(BuiltinFunction::Replace.name(), values, 3, span, sink) {
+                    return Value::Unit;
+                }
+                let (source, pattern, replacement) = (&values[0], &values[1], &values[2]);
+                if let Value::Str(source) = source {
+                    if let Value::Str(pattern) = pattern {
+                        if let Value::Str(replacement) = replacement {
+                            if pattern.is_empty() {
+                                sink.emit(
+                                    Diagnostic::error("`replace` cannot replace an empty pattern")
+                                        .at(span),
+                                );
+                                return Value::Unit;
+                            }
+                            return Value::Str(source.replace(pattern.as_str(), replacement));
+                        }
+                        sink.emit(
+                            Diagnostic::error(format!(
+                                "`replace` expects a string replacement, found `{}`",
+                                replacement.type_name()
+                            ))
+                            .at(span),
+                        );
+                        return Value::Unit;
+                    }
+                    sink.emit(
+                        Diagnostic::error(format!(
+                            "`replace` expects a string pattern, found `{}`",
+                            pattern.type_name()
+                        ))
+                        .at(span),
+                    );
+                    return Value::Unit;
+                }
+                sink.emit(
+                    Diagnostic::error(format!(
+                        "`replace` expects a string source, found `{}`",
+                        source.type_name()
+                    ))
+                    .at(span),
+                );
+                Value::Unit
+            }
+            BuiltinFunction::Trim => {
+                if !Self::check_arity(BuiltinFunction::Trim.name(), values, 1, span, sink) {
+                    return Value::Unit;
+                }
+                match &values[0] {
+                    Value::Str(value) => Value::Str(value.trim().to_owned()),
+                    other => {
+                        sink.emit(
+                            Diagnostic::error(format!(
+                                "`trim` expects a string argument, found `{}`",
+                                other.type_name()
+                            ))
+                            .at(span),
+                        );
+                        Value::Unit
+                    }
+                }
+            }
+            BuiltinFunction::Slice => {
+                if !Self::check_arity(BuiltinFunction::Slice.name(), values, 3, span, sink) {
+                    return Value::Unit;
+                }
+                let (source, start_value, end_value) = (&values[0], &values[1], &values[2]);
+                if let Value::Str(source) = source {
+                    if let (Value::Integer(start), Value::Integer(end)) = (start_value, end_value) {
+                        let length = source.chars().count() as i64;
+                        // Bounds are strict: negative or out-of-range indices,
+                        // and an inverted range, are runtime errors rather
+                        // than silent clamping.
+                        if *start < 0 || *end < 0 || *start > *end || *end > length {
+                            sink.emit(Diagnostic::error("`slice` index out of range").at(span));
+                            return Value::Unit;
+                        }
+                        let (start, end) = (*start as usize, *end as usize);
+                        let sliced = source
+                            .chars()
+                            .skip(start)
+                            .take(end - start)
+                            .collect::<String>();
+                        return Value::Str(sliced);
+                    }
+                    sink.emit(
+                        Diagnostic::error(format!(
+                            "`slice` expects integer indices, found `{}` and `{}`",
+                            start_value.type_name(),
+                            end_value.type_name()
+                        ))
+                        .at(span),
+                    );
+                    return Value::Unit;
+                }
+                sink.emit(
+                    Diagnostic::error(format!(
+                        "`slice` expects a string argument, found `{}`",
+                        source.type_name()
+                    ))
+                    .at(span),
+                );
+                Value::Unit
+            }
         }
     }
 

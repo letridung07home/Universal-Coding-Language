@@ -763,6 +763,197 @@ fn user_bindings_may_shadow_int() {
 }
 
 #[test]
+fn finds_substrings_by_scalar_value_index() {
+    for (source, expected) in [
+        ("find(\"hello\", \"ell\");", 1),
+        ("find(\"hello\", \"hello\");", 0),
+        ("find(\"abc\", \"\");", 0),
+        ("find(\"héllo\", \"llo\");", 2),
+        ("find(\"héllo\", \"é\");", 1),
+        ("find(\"hello\", \"xyz\");", -1),
+        ("find(\"\", \"a\");", -1),
+    ] {
+        let (value, sink) = eval(source);
+        assert!(!sink.has_errors(), "unexpected error for `{source}`");
+        assert_eq!(value, Some(Value::Integer(expected)), "for `{source}`");
+    }
+}
+
+#[test]
+fn reports_find_arity_and_type_errors() {
+    for source in [
+        "find();",
+        "find(\"a\");",
+        "find(1, \"a\");",
+        "find(\"a\", 1);",
+        "find(\"a\", \"b\", \"c\");",
+    ] {
+        let (value, sink) = eval(source);
+        assert_eq!(value, None, "expected an error for `{source}`");
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("`find`")),
+            "for `{source}`"
+        );
+    }
+}
+
+#[test]
+fn replaces_every_occurrence() {
+    for (source, expected) in [
+        ("replace(\"banana\", \"na\", \"ny\");", "banyny"),
+        // Overlapping-free scan: every occurrence counts.
+        ("replace(\"aaa\", \"aa\", \"b\");", "ba"),
+        ("replace(\"abc\", \"x\", \"y\");", "abc"),
+        ("replace(\"abc\", \"abc\", \"\");", ""),
+        ("replace(\"héllo héllo\", \"é\", \"e\");", "hello hello"),
+    ] {
+        let (value, sink) = eval(source);
+        assert!(!sink.has_errors(), "unexpected error for `{source}`");
+        assert_eq!(
+            value,
+            Some(Value::Str(expected.to_owned())),
+            "for `{source}`"
+        );
+    }
+}
+
+#[test]
+fn reports_replace_errors() {
+    for source in [
+        "replace();",
+        "replace(\"a\");",
+        "replace(\"a\", \"b\");",
+        "replace(1, \"b\", \"c\");",
+        "replace(\"a\", 1, \"c\");",
+        "replace(\"a\", \"b\", 2);",
+        // An empty pattern has no well-defined replacement.
+        "replace(\"abc\", \"\", \"x\");",
+        "replace(\"abc\", \"b\", \"c\", \"d\");",
+    ] {
+        let (value, sink) = eval(source);
+        assert_eq!(value, None, "expected an error for `{source}`");
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("`replace`")),
+            "for `{source}`"
+        );
+    }
+}
+
+#[test]
+fn trims_whitespace_from_both_ends() {
+    for (source, expected) in [
+        ("trim(\"  hi  \");", "hi"),
+        ("trim(\"\\thi\\n\");", "hi"),
+        ("trim(\"hi\");", "hi"),
+        ("trim(\"   \");", ""),
+        ("trim(\"\");", ""),
+        ("trim(\" é \");", "é"),
+    ] {
+        let (value, sink) = eval(source);
+        assert!(!sink.has_errors(), "unexpected error for `{source}`");
+        assert_eq!(
+            value,
+            Some(Value::Str(expected.to_owned())),
+            "for `{source}`"
+        );
+    }
+}
+
+#[test]
+fn reports_trim_arity_and_type_errors() {
+    for source in ["trim();", "trim(1);", "trim(true);", "trim(\"a\", \"b\");"] {
+        let (value, sink) = eval(source);
+        assert_eq!(value, None, "expected an error for `{source}`");
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("`trim`")),
+            "for `{source}`"
+        );
+    }
+}
+
+#[test]
+fn slices_strings_by_scalar_value_indices() {
+    for (source, expected) in [
+        ("slice(\"hello\", 0, 2);", "he"),
+        ("slice(\"hello\", 1, 4);", "ell"),
+        ("slice(\"hello\", 2, 5);", "llo"),
+        ("slice(\"hello\", 0, 5);", "hello"),
+        ("slice(\"hello\", 3, 3);", ""),
+        ("slice(\"héllo\", 1, 3);", "él"),
+        ("slice(\"héllo\", 0, 1);", "h"),
+        ("slice(\"\", 0, 0);", ""),
+    ] {
+        let (value, sink) = eval(source);
+        assert!(!sink.has_errors(), "unexpected error for `{source}`");
+        assert_eq!(
+            value,
+            Some(Value::Str(expected.to_owned())),
+            "for `{source}`"
+        );
+    }
+}
+
+#[test]
+fn reports_slice_out_of_range_and_type_errors() {
+    // Strict bounds: negative indices, out-of-range ends, inverted ranges.
+    for source in [
+        "slice(\"hello\", -1, 2);",
+        "slice(\"hello\", 0, -1);",
+        "slice(\"hello\", 3, 2);",
+        "slice(\"hello\", 0, 6);",
+        "slice(\"\", 0, 1);",
+        "slice(\"hello\", 6, 6);",
+    ] {
+        let (value, sink) = eval(source);
+        assert_eq!(value, None, "expected an error for `{source}`");
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("`slice` index out of range")),
+            "for `{source}`"
+        );
+    }
+    // Type errors.
+    for source in [
+        "slice();",
+        "slice(\"a\");",
+        "slice(\"a\", 0);",
+        "slice(1, 0, 1);",
+        "slice(\"a\", true, 1);",
+        "slice(\"a\", 0, \"b\");",
+    ] {
+        let (value, sink) = eval(source);
+        assert_eq!(value, None, "expected an error for `{source}`");
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("`slice`")),
+            "for `{source}`"
+        );
+    }
+}
+
+#[test]
+fn user_bindings_may_shadow_new_string_builtins() {
+    for (definition, call, expected) in [
+        ("let find = fn(value) { value; };", "find(41);", 41),
+        ("let replace = fn(a, b) { a * b; };", "replace(6, 7);", 42),
+        ("let trim = fn(value) { value + 1; };", "trim(41);", 42),
+        (
+            "let slice = fn(a, b, c) { a + b + c; };",
+            "slice(1, 2, 3);",
+            6,
+        ),
+    ] {
+        let source = format!("{definition} {call}");
+        let (value, sink) = eval(&source);
+        assert!(!sink.has_errors(), "for `{source}`");
+        assert_eq!(value, Some(Value::Integer(expected)), "for `{source}`");
+    }
+}
+
+#[test]
 fn decodes_escape_sequences_in_strings() {
     let (value, sink) = eval(r##""a\tb\nc\"d\\";"##);
     assert!(!sink.has_errors());
