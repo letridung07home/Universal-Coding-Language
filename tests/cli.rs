@@ -223,6 +223,34 @@ fn search_path_flag_resolves_imports() {
 }
 
 #[test]
+fn evaluates_break_and_continue_end_to_end() {
+    let source = "
+        let evens = 0;
+        let i = 0;
+        while true {
+            i = i + 1;
+            if i > 10 { break; };
+            if i % 2 == 1 { continue; };
+            evens = evens + 1;
+        };
+        evens;
+    ";
+    let (stdout, stderr, success) = run(source);
+    assert!(success, "stderr: {stderr}");
+    assert_eq!(stdout, "5\n");
+    assert!(stderr.is_empty());
+}
+
+#[test]
+fn break_outside_a_loop_reports_an_error() {
+    for source in ["break;", "fn f() { break; }; f();"] {
+        let (_stdout, stderr, success) = run(source);
+        assert!(!success, "for `{source}`");
+        assert!(stderr.contains("`break` outside of a loop"), "{stderr}");
+    }
+}
+
+#[test]
 fn ucl_path_environment_resolves_imports() {
     let app = temp_dir();
     let lib = temp_dir();

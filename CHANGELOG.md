@@ -2,6 +2,24 @@
 
 All notable changes to UCL are documented here.
 
+## 1.6.0 - 2026-08-23
+
+### Added
+
+- The `break` and `continue` statements for `while` loops. `break` exits the
+  innermost enclosing loop; `continue` skips to its next condition check.
+  Both unwind through nested blocks and conditionals, evaluate to unit, and
+  are consumed by their matching loop.
+- A `break` or `continue` that reaches a function-call boundary or the
+  program/module top level without a matching loop is a runtime error
+  (`` `break` outside of a loop `` / `` `continue` outside of a loop ``), so a
+  function called from inside a loop cannot break its caller's iteration.
+- `break` and `continue` are now reserved keywords and can no longer be used
+  as identifiers; the compatibility guarantees explicitly allow the reserved
+  set to grow in minor versions.
+- Evaluator, CLI, property-pipeline, and fuzz-corpus coverage for loop
+  control.
+
 ## 1.5.0 - 2026-08-23
 
 ### Added

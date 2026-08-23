@@ -7,7 +7,7 @@ provides an interpreter with a lexer, parser, evaluator, file-based modules,
 an interactive REPL, a command-line interface, and source-aware diagnostics.
 
 > [!NOTE]
-> UCL 1.5 follows the first stable release: the language, CLI, library API, and
+> UCL 1.6 follows the first stable release: the language, CLI, library API, and
 > error categories are covered by [compatibility guarantees](docs/guarantees.md).
 > It remains a deliberately small language — not a batteries-included
 > general-purpose scripting environment.
@@ -20,7 +20,7 @@ an interactive REPL, a command-line interface, and source-aware diagnostics.
 - Built-in functions: `len(string)`, `str(value)`, `type(value)`,
   `upper(string)`, `lower(string)`, and `contains(haystack, needle)`
 - Short-circuiting logical operators
-- `if`/`else` conditionals and `while` loops
+- `if`/`else` conditionals and `while` loops with `break` and `continue`
 - Functions: declarations, literals, closures, and recursion
 - `let` declarations and assignment
 - Blocks with lexical scoping
@@ -162,9 +162,10 @@ Version 1.0 marked the first stable release; the guarantees above now apply in
 full. UCL 1.1 adds the first built-in, `len(string)`, UCL 1.2 adds read-only
 namespaced module imports, and UCL 1.3 rounds out the built-in prelude with
 `str`, `type`, `upper`, `lower`, and `contains`. UCL 1.4 broadens the
-prebuilt release binaries to macOS and Windows, and UCL 1.5 completes the
-roadmap with extensionless imports and configurable module search paths.
-Future directions are sketched in the [project roadmap](docs/roadmap.md).
+prebuilt release binaries to macOS and Windows, UCL 1.5 completes the roadmap
+with extensionless imports and configurable module search paths, and UCL 1.6
+adds `break` and `continue` loop control statements. Future directions are
+sketched in the [project roadmap](docs/roadmap.md).
 
 ## Contributing
 

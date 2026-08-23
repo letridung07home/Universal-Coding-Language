@@ -1,0 +1,1 @@
+let i = 0; let hits = 0; while true { i = i + 1; if i > 9 { break; }; if i % 3 == 0 { continue; }; hits = hits + 1; }; str(i) + ":" + str(hits);

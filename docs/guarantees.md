@@ -113,7 +113,7 @@ but it is informational rather than a formal compatibility surface:
 ## Module loading
 
 - Module paths resolve relative to the importing file; this resolution rule
-  is normative (see the specification §5.4).
+  is normative (see the specification §5.5).
 - The evaluator reads module files from the local filesystem at evaluation
   time. Sandbox restrictions, network fetching, and package registries do
   not exist today and would be additive features.

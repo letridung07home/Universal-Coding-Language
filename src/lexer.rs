@@ -22,6 +22,10 @@ pub enum Keyword {
     Function,
     /// The `return` statement keyword.
     Return,
+    /// The `break` loop-exit keyword.
+    Break,
+    /// The `continue` loop-skip keyword.
+    Continue,
     /// The `use` module-import keyword.
     Use,
 }
@@ -181,6 +185,8 @@ impl<'src> Lexer<'src> {
                     "while" => TokenKind::Keyword(Keyword::While),
                     "fn" => TokenKind::Keyword(Keyword::Function),
                     "return" => TokenKind::Keyword(Keyword::Return),
+                    "break" => TokenKind::Keyword(Keyword::Break),
+                    "continue" => TokenKind::Keyword(Keyword::Continue),
                     "use" => TokenKind::Keyword(Keyword::Use),
                     _ => TokenKind::Ident,
                 };

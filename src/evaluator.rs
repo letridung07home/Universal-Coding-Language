@@ -397,6 +397,19 @@ impl Default for Environment {
 ///
 /// The evaluator implements the semantic rules of the UCL language,
 /// executing the abstract syntax tree to produce runtime values.
+/// A control-flow signal produced by `return`, `break`, or `continue`,
+/// waiting to be consumed at its matching boundary.
+#[derive(Clone, Debug)]
+enum Flow {
+    /// A function is returning with this value.
+    Return(Value),
+    /// The innermost enclosing `while` loop should exit.
+    Break,
+    /// The innermost enclosing `while` loop should skip to its next check.
+    Continue,
+}
+
+/// Evaluates an abstract syntax tree against an environment.
 pub struct Evaluator {
     /// Number of UCL calls currently active during evaluation.
     call_depth: Cell<usize>,
@@ -405,21 +418,21 @@ pub struct Evaluator {
     /// Once set, remaining work in the current evaluation is skipped so one
     /// resource error cannot cascade into unrelated type errors or more work.
     resource_exhausted: Cell<bool>,
-    /// A `return` statement executed by the innermost active call, waiting
-    /// to be consumed at that call's boundary.
-    pending_return: RefCell<Option<Value>>,
+    /// A control-flow signal executed by the innermost active construct,
+    /// waiting to be consumed at that construct's boundary.
+    pending_flow: RefCell<Option<Flow>>,
 }
 
 impl Evaluator {
     /// Creates a new evaluator instance.
     ///
     /// The evaluator may be reused to evaluate multiple ASTs; each evaluation
-    /// resets its active function-call counter, resource state, and any pending return.
+    /// resets its active function-call counter, resource state, and any pending control-flow signal.
     pub fn new() -> Self {
         Self {
             call_depth: Cell::new(0),
             resource_exhausted: Cell::new(false),
-            pending_return: RefCell::new(None),
+            pending_flow: RefCell::new(None),
         }
     }
 
@@ -477,13 +490,22 @@ impl Evaluator {
     ) -> Option<Value> {
         self.call_depth.set(0);
         self.resource_exhausted.set(false);
-        self.pending_return.borrow_mut().take();
+        self.pending_flow.borrow_mut().take();
         let baseline = sink.len();
         let value = self.eval(root, source, environment, sink, 0);
-        // A `return` that reaches the program boundary never ran inside a
-        // function call, which is an error in itself.
-        if self.pending_return.borrow_mut().take().is_some() {
-            sink.emit(Diagnostic::error("`return` outside of a function").at(root.span));
+        // A control-flow signal that reaches the program boundary never ran
+        // inside its matching construct, which is an error in itself.
+        match self.pending_flow.borrow_mut().take() {
+            Some(Flow::Return(_)) => {
+                sink.emit(Diagnostic::error("`return` outside of a function").at(root.span));
+            }
+            Some(Flow::Break) => {
+                sink.emit(Diagnostic::error("`break` outside of a loop").at(root.span));
+            }
+            Some(Flow::Continue) => {
+                sink.emit(Diagnostic::error("`continue` outside of a loop").at(root.span));
+            }
+            None => {}
         }
         let failed = sink
             .iter()
@@ -492,8 +514,29 @@ impl Evaluator {
         if failed { None } else { Some(value) }
     }
 
-    pub(crate) fn has_pending_return(&self) -> bool {
-        self.pending_return.borrow().is_some()
+    pub(crate) fn has_pending_flow(&self) -> bool {
+        self.pending_flow.borrow().is_some()
+    }
+
+    /// Consumes a pending loop signal after a body iteration.
+    ///
+    /// `Break` is consumed and reports that the loop must exit; `Continue`
+    /// is consumed and lets iteration proceed to the next condition check.
+    /// Anything else — no pending signal or a `return` waiting for its
+    /// function boundary — leaves iteration to the caller's other checks.
+    fn take_loop_signal(&self) -> bool {
+        let mut flow = self.pending_flow.borrow_mut();
+        match &*flow {
+            Some(Flow::Break) => {
+                *flow = None;
+                true
+            }
+            Some(Flow::Continue) => {
+                *flow = None;
+                false
+            }
+            _ => false,
+        }
     }
 
     /// Internal evaluation function that walks the AST.
@@ -521,10 +564,7 @@ impl Evaluator {
                 let mut last = Value::Unit;
                 for statement in statements {
                     last = self.eval(statement, source, environment, sink, depth + 1);
-                    if self.pending_return.borrow().is_some()
-                        || self.resource_exhausted.get()
-                        || sink.is_full()
-                    {
+                    if self.has_pending_flow() || self.resource_exhausted.get() || sink.is_full() {
                         break;
                     }
                 }
@@ -535,10 +575,7 @@ impl Evaluator {
                 let mut last = Value::Unit;
                 for statement in statements {
                     last = self.eval(statement, source, environment, sink, depth + 1);
-                    if self.pending_return.borrow().is_some()
-                        || self.resource_exhausted.get()
-                        || sink.is_full()
-                    {
+                    if self.has_pending_flow() || self.resource_exhausted.get() || sink.is_full() {
                         break;
                     }
                 }
@@ -825,9 +862,27 @@ impl Evaluator {
                             depth + 1,
                         );
                         environment.end_call(caller_scopes);
-                        // Consume whatever `return` statement the body executed; an
-                        // implicit return falls back to the body's last value.
-                        let value = self.pending_return.borrow_mut().take().unwrap_or(value);
+                        // Consume whatever control-flow signal the body
+                        // executed. A `return` supplies the call's value; a
+                        // `break` or `continue` never had a matching loop in
+                        // the body, which is an error at the call site.
+                        let value = match self.pending_flow.borrow_mut().take() {
+                            Some(Flow::Return(returned)) => returned,
+                            Some(Flow::Break) => {
+                                sink.emit(
+                                    Diagnostic::error("`break` outside of a loop").at(callee.span),
+                                );
+                                Value::Unit
+                            }
+                            Some(Flow::Continue) => {
+                                sink.emit(
+                                    Diagnostic::error("`continue` outside of a loop")
+                                        .at(callee.span),
+                                );
+                                Value::Unit
+                            }
+                            None => value,
+                        };
                         self.call_depth.set(call_depth);
                         value
                     }
@@ -859,9 +914,15 @@ impl Evaluator {
                     match condition_value {
                         Value::Boolean(true) => {
                             self.eval(body, source, environment, sink, depth + 1);
-                            if self.pending_return.borrow().is_some()
+                            // A `break` or `continue` from the body is
+                            // consumed by this loop; a pending `return` (or
+                            // exhausted resources) stops iteration without
+                            // being consumed so it propagates outward.
+                            let exit_for_break = self.take_loop_signal();
+                            if self.has_pending_flow()
                                 || self.resource_exhausted.get()
                                 || sink.is_full()
+                                || exit_for_break
                             {
                                 break;
                             }
@@ -941,8 +1002,18 @@ impl Evaluator {
                     Some(expression) => self.eval(expression, source, environment, sink, depth + 1),
                     None => Value::Unit,
                 };
-                *self.pending_return.borrow_mut() = Some(returned.clone());
+                *self.pending_flow.borrow_mut() = Some(Flow::Return(returned.clone()));
                 returned
+            }
+            AstKind::Break => {
+                // The innermost enclosing `while` consumes the signal;
+                // boundaries that never see a loop report the error instead.
+                *self.pending_flow.borrow_mut() = Some(Flow::Break);
+                Value::Unit
+            }
+            AstKind::Continue => {
+                *self.pending_flow.borrow_mut() = Some(Flow::Continue);
+                Value::Unit
             }
             AstKind::Use { path, alias, .. } => {
                 self.eval_use(path, alias, source, environment, sink, depth)
@@ -2194,6 +2265,110 @@ mod tests {
                 .contains("exceeded the maximum number of iterations")
         }));
         assert_eq!(value, None);
+    }
+
+    #[test]
+    fn break_exits_the_innermost_loop() {
+        let source = "
+            let total = 0;
+            let i = 1;
+            while i <= 10 {
+                if i == 4 { break; };
+                total = total + i;
+                i = i + 1;
+            };
+        ";
+        let (value, sink) = eval(&format!("{source} total;"));
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Integer(6)));
+    }
+
+    #[test]
+    fn continue_skips_to_the_next_condition_check() {
+        // Sum only the odd values below 10.
+        let source = "
+            let total = 0;
+            let i = 0;
+            while i < 10 {
+                i = i + 1;
+                if i % 2 == 0 { continue; };
+                total = total + i;
+            };
+        ";
+        let (value, sink) = eval(&format!("{source} total;"));
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Integer(25)));
+    }
+
+    #[test]
+    fn loop_signals_propagate_through_nested_loops_to_the_innermost_only() {
+        // `break` inside the inner loop leaves the inner loop but the outer
+        // one keeps running; `continue` in the outer loop skips its tail.
+        let source = "
+            let hits = 0;
+            let outer = 0;
+            while outer < 3 {
+                outer = outer + 1;
+                let inner = 0;
+                while inner < 10 {
+                    inner = inner + 1;
+                    break;
+                };
+                if outer == 2 { continue; };
+                hits = hits + inner;
+            };
+        ";
+        let (value, sink) = eval(&format!("{source} hits;"));
+        assert!(!sink.has_errors());
+        // Inner always breaks after one pass; the second outer pass is
+        // skipped by `continue`, so hits = 1 + 1 = 2.
+        assert_eq!(value, Some(Value::Integer(2)));
+    }
+
+    #[test]
+    fn break_inside_a_function_body_is_an_error_at_the_call_site() {
+        // A closure called from within a loop must not break the caller's
+        // loop; the signal has no matching loop inside the function.
+        let (value, sink) =
+            eval("let f = fn() { break; }; let i = 0; while i < 3 { i = i + 1; f(); };");
+        assert!(sink.has_errors());
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("`break` outside of a loop"))
+        );
+        assert_eq!(value, None);
+    }
+
+    #[test]
+    fn continue_outside_any_loop_is_an_error() {
+        for source in ["continue;", "if true { continue; };"] {
+            let (value, sink) = eval(source);
+            assert!(sink.has_errors(), "expected an error for `{source}`");
+            assert!(
+                sink.iter()
+                    .any(|diagnostic| diagnostic.message.contains("`continue` outside of a loop")),
+                "for `{source}`"
+            );
+            assert_eq!(value, None);
+        }
+    }
+
+    #[test]
+    fn break_still_runs_the_loop_condition_path_correctly_after_early_exit() {
+        // After `break`, statements after it in the body are skipped and the
+        // condition is not re-checked.
+        let source = "
+            let log = \"\";
+            let i = 0;
+            while i < 5 {
+                i = i + 1;
+                if i == 2 { break; };
+                log = log + str(i);
+            };
+        ";
+        let (value, sink) = eval(&format!("{source} log;"));
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Str("1".to_owned())));
     }
 
     #[test]

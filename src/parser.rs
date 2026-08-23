@@ -147,6 +147,11 @@ pub enum AstKind {
         /// The returned expression, if any. A bare `return` returns unit.
         value: Option<Box<AstNode>>,
     },
+    /// A `break;` statement, exiting the innermost enclosing `while` loop.
+    Break,
+    /// A `continue;` statement, skipping to the next iteration check of the
+    /// innermost enclosing `while` loop.
+    Continue,
     /// An import statement: `use "path.ucl";` or `use "path.ucl" as math;`.
     ///
     /// The path span covers the string literal; the decoded text is
@@ -405,6 +410,17 @@ impl Parser {
                 Span::new(keyword.start, end),
                 AstKind::Return { value },
             ));
+        }
+
+        // `break` and `continue` are statements, not expressions; like
+        // `return` they carry no payload.
+        if self.check_keyword(Keyword::Break) {
+            let keyword = self.advance().span;
+            return Some(AstNode::new(keyword, AstKind::Break));
+        }
+        if self.check_keyword(Keyword::Continue) {
+            let keyword = self.advance().span;
+            return Some(AstNode::new(keyword, AstKind::Continue));
         }
 
         // A `while` loop is a statement, not an expression: it evaluates to

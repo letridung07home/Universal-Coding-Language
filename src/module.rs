@@ -247,7 +247,7 @@ impl Evaluator {
                 &mut module_sink,
                 depth + 1,
             );
-            let returned_early = self.has_pending_return();
+            let escaped_flow = self.has_pending_flow();
             let module_globals = environment.restore_globals(saved_scopes);
 
             if module_sink.has_errors() {
@@ -255,9 +255,14 @@ impl Evaluator {
                 report_module_failure(sink, &module_path, &module_sink, *path_span);
                 return Value::Unit;
             }
-            if returned_early {
+            if escaped_flow {
+                // Whatever signal reached the module boundary had no matching
+                // construct at the module's top level; name it precisely.
                 environment.modules.abort();
-                sink.emit(Diagnostic::error("`return` outside of a function").at(*path_span));
+                sink.emit(
+                    Diagnostic::error("module top level cannot `return`, `break`, or `continue`")
+                        .at(*path_span),
+                );
                 return Value::Unit;
             }
 

@@ -20,7 +20,8 @@ The current implementation is intentionally small. It provides:
 - named functions with positional parameters, calls, and recursion;
 - a built-in prelude: `len(string)`, `str(value)`, `type(value)`,
   `upper(string)`, `lower(string)`, and `contains(haystack, needle)`;
-- conditional expressions (`if`/`else`) and `while` loops;
+- conditional expressions (`if`/`else`), `while` loops, and `break`/
+  `continue` loop control;
 - local-file modules with flat or read-only namespaced imports, extensionless
   import paths, and configurable search directories; and
 - structured diagnostics with source excerpts.
@@ -64,10 +65,10 @@ identifier ::= [A-Za-z_] [A-Za-z0-9_]*
 ```
 
 Identifiers name bindings. The words `let`, `fn`, `true`, `false`, `if`,
-`else`, `while`, `return`, and `use` are reserved keywords: the lexer produces
-dedicated keyword tokens for them, and they cannot be used as identifiers. The
-parser recognizes declarations from their keyword tokens rather than from
-token shape.
+`else`, `while`, `return`, `break`, `continue`, and `use` are reserved
+keywords: the lexer produces dedicated keyword tokens for them, and they
+cannot be used as identifiers. The parser recognizes declarations from their
+keyword tokens rather than from token shape.
 
 ### 2.5 String literals
 
@@ -392,7 +393,25 @@ without one the call evaluates to `unit`. `return` unwinds through nested
 blocks and loop bodies. A `return` that executes outside any function call is
 an error.
 
-### 5.4 Imports
+### 5.4 Loop control statements
+
+```
+break-statement    ::= "break" ";"
+continue-statement ::= "continue" ";"
+```
+
+A `break` statement exits the innermost enclosing `while` loop immediately;
+execution resumes after the loop. A `continue` statement skips the rest of
+the loop body and proceeds directly to the loop's next condition check. Both
+evaluate to `unit`.
+
+Both statements unwind through nested blocks and `if` bodies until they reach
+the innermost enclosing loop, which consumes them. A `break` or `continue`
+that reaches a function-call boundary — or the program or module top level —
+without having been consumed by a loop is an error: a function called from
+inside a loop cannot break or continue that caller's loop.
+
+### 5.5 Imports
 
 ```
 import ::= "use" string-literal ";"
@@ -441,7 +460,7 @@ files, syntax errors inside the module, and circular import chains all abort
 the import; a program that reports errors still runs its earlier statements
 in interactive sessions but produces no value in file mode.
 
-### 5.5 Assignment
+### 5.6 Assignment
 
 ```
 assignment ::= identifier "=" expression
@@ -453,13 +472,13 @@ an unbound name is an error; assignment does not create a binding. The
 assignment expression evaluates to the assigned value. The left-hand side must
 be an identifier; any other target is an error.
 
-### 5.6 Expression statement
+### 5.7 Expression statement
 
 An expression may stand alone as a statement; its value is computed and then
 discarded (except that the value of a program's last statement is the
 program's result).
 
-### 5.7 Blocks and scope
+### 5.8 Blocks and scope
 
 ```
 block ::= "{" statement* "}"
