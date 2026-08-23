@@ -2,6 +2,21 @@
 
 All notable changes to UCL are documented here.
 
+## 1.7.0 - 2026-08-23
+
+### Changed
+
+- Internal quality release with no language, CLI, or public API changes:
+  - `src/evaluator.rs` is split into a module directory — `value.rs`
+    (runtime values), `environment.rs` (scopes and binding resolution),
+    `builtins.rs` (the prelude enum), and `tests.rs` (the unit suite) —
+    with `mod.rs` re-exporting the same public names as before.
+  - Built-in names now have a single source of truth in
+    `BuiltinFunction::name`; arity-check call sites no longer repeat the
+    string literals.
+  - CI gains a dependency-audit job running `cargo deny` (advisories,
+    licenses, duplicate crates) configured by a new `deny.toml`.
+
 ## 1.6.0 - 2026-08-23
 
 ### Added

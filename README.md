@@ -7,7 +7,7 @@ provides an interpreter with a lexer, parser, evaluator, file-based modules,
 an interactive REPL, a command-line interface, and source-aware diagnostics.
 
 > [!NOTE]
-> UCL 1.6 follows the first stable release: the language, CLI, library API, and
+> UCL 1.7 follows the first stable release: the language, CLI, library API, and
 > error categories are covered by [compatibility guarantees](docs/guarantees.md).
 > It remains a deliberately small language — not a batteries-included
 > general-purpose scripting environment.
@@ -163,8 +163,10 @@ full. UCL 1.1 adds the first built-in, `len(string)`, UCL 1.2 adds read-only
 namespaced module imports, and UCL 1.3 rounds out the built-in prelude with
 `str`, `type`, `upper`, `lower`, and `contains`. UCL 1.4 broadens the
 prebuilt release binaries to macOS and Windows, UCL 1.5 completes the roadmap
-with extensionless imports and configurable module search paths, and UCL 1.6
-adds `break` and `continue` loop control statements. Future directions are
+with extensionless imports and configurable module search paths, UCL 1.6
+adds `break` and `continue` loop control statements, and UCL 1.7 is an
+internal-quality release that reorganizes the evaluator's source layout and
+adds a CI dependency audit with no behavior changes. Future directions are
 sketched in the [project roadmap](docs/roadmap.md).
 
 ## Contributing
