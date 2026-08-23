@@ -2,6 +2,23 @@
 
 All notable changes to UCL are documented here.
 
+## 1.4.0 - 2026-08-23
+
+### Added
+
+- Prebuilt macOS release artifacts for Apple Silicon (`aarch64-macos`) and
+  Intel (`x86_64-macos`), and Windows x86_64 artifacts in both `.zip` and
+  `.tar.gz` form, alongside the existing Linux x86_64 archive. Every artifact
+  is covered by a combined `sha256sums.txt`.
+- CI now runs the test suite on macOS and Windows in addition to Linux, so
+  platform-specific breakage surfaces before a release is tagged.
+
+### Changed
+
+- The release workflow builds each platform natively in a matrix job and
+  publishes all artifacts from a single follow-up job; release notes and
+  checksum handling are unchanged.
+
 ## 1.3.0 - 2026-08-23
 
 ### Added

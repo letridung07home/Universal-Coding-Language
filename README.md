@@ -7,7 +7,7 @@ provides an interpreter with a lexer, parser, evaluator, file-based modules,
 an interactive REPL, a command-line interface, and source-aware diagnostics.
 
 > [!NOTE]
-> UCL 1.3 follows the first stable release: the language, CLI, library API, and
+> UCL 1.4 follows the first stable release: the language, CLI, library API, and
 > error categories are covered by [compatibility guarantees](docs/guarantees.md).
 > It remains a deliberately small language — not a batteries-included
 > general-purpose scripting environment.
@@ -88,7 +88,11 @@ do not end the session.
 
 ## Install
 
-Download a prebuilt Linux binary from the [latest release](https://github.com/letridung07home/Universal-Coding-Language/releases/latest):
+Prebuilt binaries for Linux x86_64, macOS (Apple Silicon and Intel), and
+Windows x86_64 are attached to each
+[release](https://github.com/letridung07home/Universal-Coding-Language/releases/latest).
+
+**Linux:**
 
 ```sh
 curl -LO https://github.com/letridung07home/Universal-Coding-Language/releases/latest/download/ucl-x86_64-linux.tar.gz
@@ -96,7 +100,21 @@ tar -xzf ucl-x86_64-linux.tar.gz
 sudo mv ucl-x86_64-linux/ucl /usr/local/bin/
 ```
 
-Verify the download against `sha256sums.txt` attached to the same release.
+**macOS** — pick the archive matching your architecture (`aarch64` for Apple
+Silicon, `x86_64` for Intel):
+
+```sh
+curl -LO https://github.com/letridung07home/Universal-Coding-Language/releases/latest/download/ucl-aarch64-macos.tar.gz
+tar -xzf ucl-aarch64-macos.tar.gz
+sudo mkdir -p /usr/local/bin && sudo mv ucl-aarch64-macos/ucl /usr/local/bin/
+```
+
+**Windows** — download `ucl-x86_64-windows.zip` from the latest release,
+extract it, and place `ucl-x86_64-windows\ucl.exe` somewhere on your `PATH`
+(a `.tar.gz` is also provided if you prefer).
+
+Verify any download against the `sha256sums.txt` file attached to the same
+release.
 
 ## Build and run
 
@@ -141,9 +159,9 @@ architecture, and contribution instructions.
 Version 1.0 marked the first stable release; the guarantees above now apply in
 full. UCL 1.1 adds the first built-in, `len(string)`, UCL 1.2 adds read-only
 namespaced module imports, and UCL 1.3 rounds out the built-in prelude with
-`str`, `type`, `upper`, `lower`, and `contains`. Future directions — a richer
-package story and broader release artifacts — are sketched in the
-[project roadmap](docs/roadmap.md).
+`str`, `type`, `upper`, `lower`, and `contains`. UCL 1.4 broadens the
+prebuilt release binaries to macOS and Windows. Future directions — a richer
+package story — are sketched in the [project roadmap](docs/roadmap.md).
 
 ## Contributing
 

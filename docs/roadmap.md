@@ -55,8 +55,9 @@ than scheduled:
       `contains`
 - [x] Add namespaced imports (`use "path" as module;`) and member access
       (`module.name`) alongside legacy flat imports
+- [x] Broader platform coverage for release artifacts (macOS and Windows
+      joined Linux, with CI coverage for each supported OS)
 - A richer module/package story beyond local files
-- Broader platform coverage for release artifacts
 
 Each of these is additive; none would require a breaking change. UCL 1.1 adds
 a deterministic 8 MiB string-value limit to keep repeated concatenation from
@@ -64,4 +65,6 @@ exhausting host memory. UCL 1.2 adds read-only namespace aliases backed by a
 per-session completed-export cache, keeping existing flat imports intact.
 UCL 1.3 expands the built-in prelude with value conversion, type inspection,
 and string helpers, all sharing the result-echo rendering through one
-implementation.
+implementation. UCL 1.4 broadens release artifacts to macOS (Apple Silicon
+and Intel) and Windows x86_64, with CI running the test suite on each
+supported platform.

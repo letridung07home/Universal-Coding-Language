@@ -11,15 +11,28 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build-linux-x86_64:
-    name: Build Linux x86_64
-    runs-on: ubuntu-latest
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            os: ubuntu-latest
+            platform: x86_64-linux
+          - name: macOS aarch64
+            os: macos-latest
+            platform: aarch64-macos
+          - name: macOS x86_64
+            os: macos-13
+            platform: x86_64-macos
+          - name: Windows x86_64
+            os: windows-latest
+            platform: x86_64-windows
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
-        with:
-          # Full history so `git describe` can find the previous release tag.
-          fetch-depth: 0
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -30,16 +43,66 @@ jobs:
       - name: Build release binary
         run: cargo build --release --locked
 
-      - name: Smoke test binary
+      - name: Smoke test binary (Unix)
+        if: runner.os != 'Windows'
         run: ./target/release/ucl --help > /dev/null
 
-      - name: Package release artifacts
+      - name: Smoke test binary (Windows)
+        if: runner.os == 'Windows'
+        run: ./target/release/ucl.exe --help | Out-Null
+
+      - name: Package release artifacts (Unix)
+        if: runner.os != 'Windows'
         run: |
-          mkdir -p dist/ucl-x86_64-linux
-          cp target/release/ucl dist/ucl-x86_64-linux/
-          cp README.md LICENSE-MIT LICENSE-APACHE dist/ucl-x86_64-linux/
-          tar -czf dist/ucl-x86_64-linux.tar.gz -C dist ucl-x86_64-linux
-          (cd dist && sha256sum ucl-x86_64-linux.tar.gz > sha256sums.txt)
+          mkdir -p dist/ucl-${{ matrix.platform }}
+          cp target/release/ucl dist/ucl-${{ matrix.platform }}/
+          cp README.md LICENSE-MIT LICENSE-APACHE dist/ucl-${{ matrix.platform }}/
+          tar -czf ucl-${{ matrix.platform }}.tar.gz -C dist ucl-${{ matrix.platform }}
+          sha256sum ucl-${{ matrix.platform }}.tar.gz > ucl-${{ matrix.platform }}.tar.gz.sha256
+
+      - name: Package release artifacts (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "dist/ucl-${{ matrix.platform }}" | Out-Null
+          Copy-Item target/release/ucl.exe "dist/ucl-${{ matrix.platform }}/"
+          Copy-Item README.md, LICENSE-MIT, LICENSE-APACHE "dist/ucl-${{ matrix.platform }}/"
+          tar -czf "ucl-${{ matrix.platform }}.tar.gz" -C dist "ucl-${{ matrix.platform }}"
+          Compress-Archive -Path "dist/ucl-${{ matrix.platform }}" -DestinationPath "ucl-${{ matrix.platform }}.zip"
+          foreach ($format in @("tar.gz", "zip")) {
+            $hash = (Get-FileHash "ucl-${{ matrix.platform }}.$format" -Algorithm SHA256).Hash.ToLower()
+            "$hash  ucl-${{ matrix.platform }}.$format" | Out-File -Encoding asciiNoBOM "ucl-${{ matrix.platform }}.$format.sha256"
+          }
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ucl-${{ matrix.platform }}
+          path: |
+            ucl-*.tar.gz
+            ucl-*.zip
+            ucl-*.sha256
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          # Full history so `git describe` can find the previous release tag.
+          fetch-depth: 0
+
+      - name: Download all release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Merge checksums
+        run: cat dist/*.sha256 > dist/sha256sums.txt
 
       - name: Extract release notes from the changelog
         run: |
@@ -67,4 +130,4 @@ jobs:
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --verify-tag --notes-file "$RUNNER_TEMP/release-notes-final.md" --title "UCL ${GITHUB_REF_NAME#v}" dist/ucl-x86_64-linux.tar.gz dist/sha256sums.txt
+        run: gh release create "$GITHUB_REF_NAME" --verify-tag --notes-file "$RUNNER_TEMP/release-notes-final.md" --title "UCL ${GITHUB_REF_NAME#v}" dist/*.tar.gz dist/*.zip dist/sha256sums.txt
