@@ -18,7 +18,8 @@ The current implementation is intentionally small. It provides:
 - integer, boolean, and string operators;
 - `let` declarations, assignment, blocks, and lexical scoping;
 - named functions with positional parameters, calls, and recursion;
-- a built-in prelude with Unicode-aware `len(string)`;
+- a built-in prelude: `len(string)`, `str(value)`, `type(value)`,
+  `upper(string)`, `lower(string)`, and `contains(haystack, needle)`;
 - conditional expressions (`if`/`else`) and `while` loops;
 - local-file modules with flat or read-only namespaced imports; and
 - structured diagnostics with source excerpts.
@@ -203,9 +204,10 @@ Because every binary operator is left-associative, `2 ^ 3 ^ 2` is `(2 ^ 3) ^
 addition, and adding two strings concatenates them. Mixing types is an error.
 
 Every evaluated string value is limited to **8 MiB of UTF-8 bytes**. This limit
-applies to decoded string literals and concatenation results. A construction
-that would exceed it is a runtime error; evaluation stops rather than allowing
-unbounded string growth to exhaust host memory.
+applies to decoded string literals, concatenation results, and strings produced
+by built-in functions. A construction that would exceed it is a runtime error;
+evaluation stops rather than allowing unbounded string growth to exhaust host
+memory.
 
 `&` and `|` are logical operators on booleans only, not bitwise operators on
 integers. Both *short-circuit*: `&` does not evaluate its right-hand side when
@@ -246,14 +248,24 @@ names may be shadowed by `let` declarations, function declarations, parameters,
 or inner block bindings; resetting a REPL session restores the original
 prelude.
 
-`len` is currently the only built-in:
+The prelude currently provides these built-ins:
 
 | Call | Result |
 |------|--------|
 | `len(string)` | An integer equal to the number of Unicode scalar values in `string`. |
+| `str(value)` | A string holding the same text the CLI and REPL echo for `value`: integers and booleans render as written, strings are unchanged, functions render as `<function>`, modules render as `<module>`, and unit renders as `unit`. |
+| `type(value)` | A string naming the value's type: `integer`, `boolean`, `string`, `function`, or `module`. |
+| `upper(string)` | The string converted to upper case. |
+| `lower(string)` | The string converted to lower case. |
+| `contains(haystack, needle)` | A boolean reporting whether the string `haystack` contains the string `needle` as a substring. |
 
-For example, `len("hé")` evaluates to `2`. Calling `len` with anything other
-than exactly one string argument is a runtime error.
+For example, `len("hé")` evaluates to `2`, `upper("hé")` evaluates to `"HÉ"`,
+and `type(len)` evaluates to `"function"`. Calling a built-in with anything
+other than exactly its declared arguments, or with arguments of the wrong
+types, is a runtime error.
+
+Strings produced by built-ins are subject to the same deterministic value
+limit as any other string.
 
 At call time a function sees three layers of bindings: the *current* global
 scope, its own captured bindings (§4.4), and a fresh scope holding its

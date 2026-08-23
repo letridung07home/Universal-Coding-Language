@@ -1,0 +1,1 @@
+let label = upper("ucl") + "-" + str(130); if contains(label, "UCL") { type(len(label)); } else { lower(type(label)); };

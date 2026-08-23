@@ -2,6 +2,29 @@
 
 All notable changes to UCL are documented here.
 
+## 1.3.0 - 2026-08-23
+
+### Added
+
+- Five new built-in functions, joining `len` in the prelude:
+  - `str(value)` returns the same text the CLI and REPL echo for the value:
+    integers and booleans render as written, strings are unchanged, functions
+    render as `<function>`, modules as `<module>`, and unit as `unit`.
+  - `type(value)` returns `"integer"`, `"boolean"`, `"string"`, `"function"`,
+    or `"module"`.
+  - `upper(string)` and `lower(string)` perform Unicode case conversion.
+  - `contains(haystack, needle)` reports whether one string contains another.
+- The public `Value::display_text` method, the shared implementation behind
+  both result echoing and the `str` built-in, so the two cannot disagree.
+- Strings produced by built-ins honor the deterministic 8 MiB value limit.
+- Evaluator, CLI, REPL-reset, property, and fuzz-corpus coverage for the new
+  built-ins.
+
+### Changed
+
+- Built-in arity errors now use a uniform message form:
+  `` `name` expected N argument(s), received M ``.
+
 ## 1.2.0 - 2026-08-22
 
 ### Added

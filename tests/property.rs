@@ -404,3 +404,47 @@ fn recursion_computes_the_same_result_as_iteration() {
         );
     }
 }
+
+#[test]
+fn string_builtins_agree_with_rust_implementations() {
+    let mut rng = Rng::new(0x5EED_5721_0000_0042);
+
+    const WORDS: [&str; 8] = ["apple", "App", "BANANA", "", "é", "ß", "İ", "abc123"];
+    for _ in 0..300 {
+        let word = WORDS[rng.below(WORDS.len() as u64) as usize];
+
+        // Case mapping must agree with Rust's own Unicode implementation.
+        for (builtin, expected) in [
+            ("upper", word.to_uppercase()),
+            ("lower", word.to_lowercase()),
+        ] {
+            let source_text = format!("{builtin}(\"{word}\");");
+            let (value, had_errors) = eval_expression(&source_text);
+            assert!(!had_errors, "unexpected error for `{source_text}`");
+            assert_eq!(value, Value::Str(expected), "mismatch for `{source_text}`");
+        }
+
+        // `contains` with the empty needle always holds, and containment
+        // against a suffix of the word agrees with Rust's `str::contains`.
+        let chars = word.chars().count();
+        let suffix = if chars == 0 {
+            ""
+        } else {
+            &word[word
+                .char_indices()
+                .map(|(index, _)| index)
+                .nth(rng.below(chars as u64) as usize)
+                .unwrap_or(0)..]
+        };
+        for (needle, expected) in [("", true), (suffix, word.contains(suffix))] {
+            let source_text = format!("contains(\"{word}\", \"{needle}\");");
+            let (value, had_errors) = eval_expression(&source_text);
+            assert!(!had_errors, "unexpected error for `{source_text}`");
+            assert_eq!(
+                value,
+                Value::Boolean(expected),
+                "mismatch for `{source_text}`"
+            );
+        }
+    }
+}

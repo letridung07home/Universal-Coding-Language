@@ -134,6 +134,57 @@ fn reports_len_errors_without_stdout() {
 }
 
 #[test]
+fn evaluates_new_builtins_end_to_end() {
+    for (source, expected) in [
+        ("str(42);", "42"),
+        ("str(true);", "true"),
+        ("str(\"hé\");", "hé"),
+        ("type(1);", "integer"),
+        ("upper(\"abc\");", "ABC"),
+        ("lower(\"ABC\");", "abc"),
+        ("contains(\"hello\", \"ell\");", "true"),
+    ] {
+        let (stdout, stderr, success) = run(source);
+        assert!(success, "stderr: {stderr}");
+        assert_eq!(stdout, format!("{expected}\n"), "for `{source}`");
+        assert!(stderr.is_empty(), "for `{source}`");
+    }
+}
+
+#[test]
+fn str_mirrors_the_result_echo_for_callables() {
+    let (stdout, stderr, success) = run("str(len);");
+    assert!(success, "stderr: {stderr}");
+    assert_eq!(stdout, "<function>\n");
+
+    // The same text the CLI would echo for a function value.
+    let (stdout, _stderr, success) = run("fn f(n) { n; }; str(f);");
+    assert!(success);
+    assert_eq!(stdout, "<function>\n");
+}
+
+#[test]
+fn str_renders_unit_as_its_type_name() {
+    // A bare `return` produces unit; the echo omits unit but `str` renders it.
+    let (stdout, stderr, success) = run("fn f() { return; }; str(f());");
+    assert!(success, "stderr: {stderr}");
+    assert_eq!(stdout, "unit\n");
+}
+
+#[test]
+fn reports_new_builtin_errors_without_stdout() {
+    for source in ["upper(1);", "lower(true);", "contains(1, \"a\");"] {
+        let (stdout, stderr, success) = run(source);
+        assert!(!success, "for `{source}`");
+        assert!(stdout.is_empty(), "for `{source}`");
+        assert!(
+            stderr.contains("expects a string"),
+            "for `{source}`: {stderr}"
+        );
+    }
+}
+
+#[test]
 fn reports_function_arity_errors_with_an_excerpt() {
     let (stdout, stderr, success) = run("fn identity(value) { value; }; identity();");
 
@@ -356,6 +407,16 @@ fn repl_reset_keeps_the_builtin_prelude() {
     assert_eq!(code, 0);
     assert!(stdout.contains("session reset"), "stdout: {stdout}");
     assert!(stdout.contains("3"), "stdout: {stdout}");
+    assert!(stderr.is_empty(), "stderr: {stderr}");
+}
+
+#[test]
+fn repl_reset_restores_every_builtin() {
+    let (stdout, stderr, code) =
+        run_repl("let str = 1;\nlet upper = 2;\n:reset\nstr(upper(\"a\"));\n");
+    assert_eq!(code, 0);
+    assert!(stdout.contains("session reset"), "stdout: {stdout}");
+    assert!(stdout.contains("A"), "stdout: {stdout}");
     assert!(stderr.is_empty(), "stderr: {stderr}");
 }
 

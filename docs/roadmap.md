@@ -51,7 +51,8 @@ and error categories are covered by the
 than scheduled:
 
 - [x] Add the first built-in function: `len(string)` for Unicode scalar-value length
-- Additional built-in functions beyond `len`
+- [x] Add additional built-in functions: `str`, `type`, `upper`, `lower`, and
+      `contains`
 - [x] Add namespaced imports (`use "path" as module;`) and member access
       (`module.name`) alongside legacy flat imports
 - A richer module/package story beyond local files
@@ -61,3 +62,6 @@ Each of these is additive; none would require a breaking change. UCL 1.1 adds
 a deterministic 8 MiB string-value limit to keep repeated concatenation from
 exhausting host memory. UCL 1.2 adds read-only namespace aliases backed by a
 per-session completed-export cache, keeping existing flat imports intact.
+UCL 1.3 expands the built-in prelude with value conversion, type inspection,
+and string helpers, all sharing the result-echo rendering through one
+implementation.

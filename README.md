@@ -7,7 +7,7 @@ provides an interpreter with a lexer, parser, evaluator, file-based modules,
 an interactive REPL, a command-line interface, and source-aware diagnostics.
 
 > [!NOTE]
-> UCL 1.2 follows the first stable release: the language, CLI, library API, and
+> UCL 1.3 follows the first stable release: the language, CLI, library API, and
 > error categories are covered by [compatibility guarantees](docs/guarantees.md).
 > It remains a deliberately small language — not a batteries-included
 > general-purpose scripting environment.
@@ -17,7 +17,8 @@ an interactive REPL, a command-line interface, and source-aware diagnostics.
 - Signed 64-bit integers, booleans, and strings
 - Checked arithmetic, comparison, and equality operators
 - String concatenation with escape sequences and a deterministic 8 MiB value limit
-- Built-in functions, beginning with Unicode-aware `len(string)`
+- Built-in functions: `len(string)`, `str(value)`, `type(value)`,
+  `upper(string)`, `lower(string)`, and `contains(haystack, needle)`
 - Short-circuiting logical operators
 - `if`/`else` conditionals and `while` loops
 - Functions: declarations, literals, closures, and recursion
@@ -42,15 +43,15 @@ Create `example.ucl`:
 ```ucl
 fn area(w, h) { w * h; };
 let describe = fn(n) { if n == 42 { "the answer"; } else { "not quite"; }; };
-let label = "UCL";
-len(label + " 1.2");
+let label = upper("ucl");
+label + ": " + str(contains(label, "UCL"));
 ```
 
 Evaluate it:
 
 ```console
 $ cargo run -- example.ucl
-7
+UCL: true
 ```
 
 Use `cargo run -- --help` to display command-line help, or start an
@@ -58,12 +59,14 @@ interactive session by running `ucl` without arguments:
 
 ```console
 $ cargo run
-UCL 1.2.0 interactive mode — type :help for help.
+UCL 1.3.0 interactive mode — type :help for help.
 >>> let x = 40;
 >>> x + 2;
 42
 >>> len("hé");
 2
+>>> str(x + 2) + "!";
+42!
 >>> use "math.ucl" as math;
 >>> math.double(21);
 42
@@ -136,9 +139,10 @@ architecture, and contribution instructions.
 ## Roadmap
 
 Version 1.0 marked the first stable release; the guarantees above now apply in
-full. UCL 1.1 adds the first built-in, `len(string)`, and UCL 1.2 adds
-read-only namespaced module imports. Future directions — additional built-ins,
-a richer package story, and broader release artifacts — are sketched in the
+full. UCL 1.1 adds the first built-in, `len(string)`, UCL 1.2 adds read-only
+namespaced module imports, and UCL 1.3 rounds out the built-in prelude with
+`str`, `type`, `upper`, `lower`, and `contains`. Future directions — a richer
+package story and broader release artifacts — are sketched in the
 [project roadmap](docs/roadmap.md).
 
 ## Contributing

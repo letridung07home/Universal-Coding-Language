@@ -68,6 +68,16 @@ const MAX_CALL_DEPTH: usize = 128;
 pub enum BuiltinFunction {
     /// Returns the number of Unicode scalar values in a string.
     Len,
+    /// Returns the result-echo text form of any value.
+    Str,
+    /// Returns the name of a value's type.
+    Type,
+    /// Converts a string to upper case.
+    Upper,
+    /// Converts a string to lower case.
+    Lower,
+    /// Reports whether one string contains another as a substring.
+    Contains,
 }
 
 impl BuiltinFunction {
@@ -75,7 +85,25 @@ impl BuiltinFunction {
     fn name(self) -> &'static str {
         match self {
             Self::Len => "len",
+            Self::Str => "str",
+            Self::Type => "type",
+            Self::Upper => "upper",
+            Self::Lower => "lower",
+            Self::Contains => "contains",
         }
+    }
+
+    /// Iterates over every built-in, in prelude registration order.
+    fn all() -> impl Iterator<Item = Self> {
+        [
+            Self::Len,
+            Self::Str,
+            Self::Type,
+            Self::Upper,
+            Self::Lower,
+            Self::Contains,
+        ]
+        .into_iter()
     }
 }
 
@@ -159,7 +187,8 @@ impl PartialEq for FunctionValue {
 }
 
 impl Value {
-    /// Returns the value's short type name, used in diagnostics.
+    /// Returns the value's short type name, used in diagnostics and by
+    /// the `type` built-in.
     fn type_name(&self) -> &'static str {
         match self {
             Value::Unit => "unit",
@@ -168,6 +197,22 @@ impl Value {
             Value::Str(_) => "string",
             Value::Function(_) | Value::Builtin(_) => "function",
             Value::Module(_) => "module",
+        }
+    }
+
+    /// Renders the value as text, exactly as the CLI and REPL echo results.
+    ///
+    /// Unit renders as `"unit"`, matching its type name; interactive front
+    /// ends omit unit results instead of printing this text. Strings render
+    /// their raw contents, so `str` of a string is that string.
+    pub fn display_text(&self) -> String {
+        match self {
+            Value::Unit => self.type_name().to_owned(),
+            Value::Integer(integer) => format!("{integer}"),
+            Value::Boolean(boolean) => format!("{boolean}"),
+            Value::Str(string) => string.clone(),
+            Value::Function(_) | Value::Builtin(_) => "<function>".to_owned(),
+            Value::Module(_) => "<module>".to_owned(),
         }
     }
 }
@@ -198,10 +243,9 @@ impl Environment {
     pub fn new() -> Self {
         Self {
             scopes: vec![HashMap::new()],
-            builtins: HashMap::from([(
-                BuiltinFunction::Len.name().to_owned(),
-                Value::Builtin(BuiltinFunction::Len),
-            )]),
+            builtins: BuiltinFunction::all()
+                .map(|builtin| (builtin.name().to_owned(), Value::Builtin(builtin)))
+                .collect(),
             modules: ModuleState::default(),
         }
     }
@@ -906,14 +950,7 @@ impl Evaluator {
     ) -> Value {
         match builtin {
             BuiltinFunction::Len => {
-                if values.len() != 1 {
-                    sink.emit(
-                        Diagnostic::error(format!(
-                            "`len` expected 1 argument, received {}",
-                            values.len()
-                        ))
-                        .at(span),
-                    );
+                if !Self::check_arity("len", values, 1, span, sink) {
                     return Value::Unit;
                 }
                 match &values[0] {
@@ -930,7 +967,100 @@ impl Evaluator {
                     }
                 }
             }
+            BuiltinFunction::Str => {
+                if !Self::check_arity("str", values, 1, span, sink) {
+                    return Value::Unit;
+                }
+                let text = values[0].display_text();
+                if !self.check_string_size(text.len(), span, sink) {
+                    return Value::Unit;
+                }
+                Value::Str(text)
+            }
+            BuiltinFunction::Type => {
+                if !Self::check_arity("type", values, 1, span, sink) {
+                    return Value::Unit;
+                }
+                Value::Str(values[0].type_name().to_owned())
+            }
+            BuiltinFunction::Upper | BuiltinFunction::Lower => {
+                let name = builtin.name();
+                if !Self::check_arity(name, values, 1, span, sink) {
+                    return Value::Unit;
+                }
+                match &values[0] {
+                    Value::Str(value) => {
+                        let mapped = match builtin {
+                            BuiltinFunction::Upper => value.to_uppercase(),
+                            _ => value.to_lowercase(),
+                        };
+                        if !self.check_string_size(mapped.len(), span, sink) {
+                            return Value::Unit;
+                        }
+                        Value::Str(mapped)
+                    }
+                    other => {
+                        sink.emit(
+                            Diagnostic::error(format!(
+                                "`{name}` expects a string argument, found `{}`",
+                                other.type_name()
+                            ))
+                            .at(span),
+                        );
+                        Value::Unit
+                    }
+                }
+            }
+            BuiltinFunction::Contains => {
+                if !Self::check_arity("contains", values, 2, span, sink) {
+                    return Value::Unit;
+                }
+                let (haystack, needle) = (&values[0], &values[1]);
+                if let Value::Str(haystack) = haystack {
+                    if let Value::Str(needle) = needle {
+                        return Value::Boolean(haystack.contains(needle.as_str()));
+                    }
+                    sink.emit(
+                        Diagnostic::error(format!(
+                            "`contains` expects a string needle, found `{}`",
+                            needle.type_name()
+                        ))
+                        .at(span),
+                    );
+                    return Value::Unit;
+                }
+                sink.emit(
+                    Diagnostic::error(format!(
+                        "`contains` expects a string haystack, found `{}`",
+                        haystack.type_name()
+                    ))
+                    .at(span),
+                );
+                Value::Unit
+            }
         }
+    }
+
+    /// Checks that a built-in call received exactly `expected` arguments,
+    /// emitting an arity error and returning false otherwise.
+    fn check_arity(
+        name: &str,
+        values: &[Value],
+        expected: usize,
+        span: Span,
+        sink: &mut DiagnosticSink,
+    ) -> bool {
+        if values.len() == expected {
+            return true;
+        }
+        sink.emit(
+            Diagnostic::error(format!(
+                "`{name}` expected {expected} argument(s), received {}",
+                values.len()
+            ))
+            .at(span),
+        );
+        false
     }
 
     fn eval_unary(
@@ -1817,6 +1947,116 @@ mod tests {
         let (value, sink) = eval("let len = fn(value) { value + 1; }; len(41);");
         assert!(!sink.has_errors());
         assert_eq!(value, Some(Value::Integer(42)));
+    }
+
+    #[test]
+    fn evaluates_str_across_value_kinds() {
+        for (source, expected) in [
+            ("str(42);", "42"),
+            ("str(-7);", "-7"),
+            ("str(true);", "true"),
+            ("str(\"hé\");", "hé"),
+            ("fn f() { return; }; str(f());", "unit"),
+            ("str(fn(n) { n; });", "<function>"),
+            ("str(len);", "<function>"),
+        ] {
+            let (value, sink) = eval(source);
+            assert!(!sink.has_errors(), "unexpected error for `{source}`");
+            assert_eq!(
+                value,
+                Some(Value::Str(expected.to_owned())),
+                "for `{source}`"
+            );
+        }
+    }
+
+    #[test]
+    fn evaluates_type_for_each_value_kind() {
+        for (source, expected) in [
+            ("type(1);", "integer"),
+            ("type(false);", "boolean"),
+            ("type(\"a\");", "string"),
+            ("type(len);", "function"),
+        ] {
+            let (value, sink) = eval(source);
+            assert!(!sink.has_errors(), "unexpected error for `{source}`");
+            assert_eq!(
+                value,
+                Some(Value::Str(expected.to_owned())),
+                "for `{source}`"
+            );
+        }
+    }
+
+    #[test]
+    fn evaluates_case_builtins() {
+        for (source, expected) in [
+            ("upper(\"hello\");", "HELLO"),
+            ("lower(\"WORLD\");", "world"),
+            ("upper(\"hé\");", "HÉ"),
+            ("lower(\"HÉ\");", "hé"),
+            ("upper(\"\");", ""),
+        ] {
+            let (value, sink) = eval(source);
+            assert!(!sink.has_errors(), "unexpected error for `{source}`");
+            assert_eq!(
+                value,
+                Some(Value::Str(expected.to_owned())),
+                "for `{source}`"
+            );
+        }
+    }
+
+    #[test]
+    fn evaluates_contains() {
+        for (source, expected) in [
+            ("contains(\"hello\", \"ell\");", true),
+            ("contains(\"hello\", \"xyz\");", false),
+            ("contains(\"\", \"\");", true),
+            ("contains(\"abc\", \"\");", true),
+            ("contains(\"abc\", \"abc\");", true),
+            ("contains(\"héllo\", \"éll\");", true),
+        ] {
+            let (value, sink) = eval(source);
+            assert!(!sink.has_errors(), "unexpected error for `{source}`");
+            assert_eq!(value, Some(Value::Boolean(expected)), "for `{source}`");
+        }
+    }
+
+    #[test]
+    fn reports_new_builtin_arity_and_type_errors() {
+        for source in [
+            "str();",
+            "str(1, 2);",
+            "type();",
+            "type(\"a\", \"b\");",
+            "upper();",
+            "upper(1);",
+            "lower(true);",
+            "contains();",
+            "contains(\"a\");",
+            "contains(1, \"a\");",
+            "contains(\"a\", 1);",
+        ] {
+            let (value, sink) = eval(source);
+            assert_eq!(value, None, "expected an error for `{source}`");
+            assert!(
+                sink.iter()
+                    .any(|diagnostic| diagnostic.message.contains('`')),
+                "expected a built-in-specific error for `{source}`"
+            );
+        }
+    }
+
+    #[test]
+    fn user_bindings_may_shadow_new_builtins() {
+        let (value, sink) = eval("let str = fn(value) { value + 1; }; str(41);");
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Integer(42)));
+
+        let (value, sink) = eval("fn contains(a, b) { a; }; contains(7, 8);");
+        assert!(!sink.has_errors());
+        assert_eq!(value, Some(Value::Integer(7)));
     }
 
     #[test]

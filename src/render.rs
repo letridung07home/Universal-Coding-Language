@@ -116,13 +116,12 @@ fn marker_text(source: &str) -> String {
 }
 
 /// Renders a value the way the CLI echoes results, omitting the unit value.
+///
+/// All other forms come from [`Value::display_text`] so the echo and the
+/// `str` built-in can never disagree.
 pub fn format_value(value: &Value) -> Option<String> {
     match value {
         Value::Unit => None,
-        Value::Integer(integer) => Some(format!("{integer}")),
-        Value::Boolean(boolean) => Some(format!("{boolean}")),
-        Value::Str(string) => Some(string.clone()),
-        Value::Function(_) | Value::Builtin(_) => Some("<function>".to_owned()),
-        Value::Module(_) => Some("<module>".to_owned()),
+        other => Some(other.display_text()),
     }
 }
