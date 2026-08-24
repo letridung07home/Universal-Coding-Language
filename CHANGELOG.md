@@ -2,6 +2,16 @@
 
 All notable changes to UCL are documented here.
 
+## 1.12.1 - 2026-08-23
+
+### Fixed
+
+- Side effects no longer execute twice when an append-style assignment such
+  as `s = s + <block>` falls back from the in-place fast path. Blocks
+  containing `for` loops or `let` declarations were misclassified as
+  mutation-free, so a non-string result triggered re-evaluation — running
+  the block's loop or initializer twice before the (unavoidable) type error.
+
 ## 1.12.0 - 2026-08-23
 
 ### Added

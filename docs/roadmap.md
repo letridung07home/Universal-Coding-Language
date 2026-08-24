@@ -89,3 +89,16 @@ and Intel) and Windows x86_64, with CI running the test suite on each
 supported platform. UCL 1.5 completes the roadmap with extensionless import
 paths and configurable module search directories, keeping imports next to
 the importing file as the highest-priority resolution.
+
+## Internal quality backlog
+
+Refactor work tracked for future releases; none changes language behavior:
+
+- [ ] Replace wildcard match fallbacks over `AstKind` (such as
+      `may_mutate_bindings`'s `_ => false`) with explicit handling or a
+      single source of truth for which node kinds execute code, so adding a
+      variant cannot silently skip a check again (the 1.12.1 double-evaluation
+      fix is the cautionary tale)
+- [ ] Switch list storage to shared references (`Rc<Vec<Value>>`) so `append`
+      and iteration avoid copying every element on each call; today's
+      accumulate-in-a-loop idiom is quadratic in list length
