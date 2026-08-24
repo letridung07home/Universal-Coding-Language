@@ -94,11 +94,14 @@ the importing file as the highest-priority resolution.
 
 Refactor work tracked for future releases; none changes language behavior:
 
-- [ ] Replace wildcard match fallbacks over `AstKind` (such as
-      `may_mutate_bindings`'s `_ => false`) with explicit handling or a
-      single source of truth for which node kinds execute code, so adding a
-      variant cannot silently skip a check again (the 1.12.1 double-evaluation
-      fix is the cautionary tale)
-- [ ] Switch list storage to shared references (`Rc<Vec<Value>>`) so `append`
-      and iteration avoid copying every element on each call; today's
-      accumulate-in-a-loop idiom is quadratic in list length
+- [x] Replace wildcard match fallbacks over `AstKind` (such as
+      `may_mutate_bindings`'s `_ => false`) with explicit handling so adding
+      a variant cannot silently skip a check again — the 1.12.1
+      double-evaluation fix was the cautionary tale, and the exhaustive
+      rewrite immediately caught an unclassified `Member` arm (UCL 1.13)
+- [x] Move list storage behind shared references (`Rc<Vec<Value>>`) so
+      rebinding, capturing, and passing lists copy a reference instead of
+      every element (~27× faster list rebinding in the 1.13 gate). Note:
+      `append` itself remains O(n) per call by design — a functional update
+      must copy when aliasing is possible — but it reuses its buffer through
+      `Rc::make_mut` whenever the argument is uniquely owned (UCL 1.13)

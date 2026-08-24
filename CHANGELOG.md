@@ -2,6 +2,28 @@
 
 All notable changes to UCL are documented here.
 
+## 1.13.0 - 2026-08-23
+
+### Changed
+
+- Internal quality release; language behavior is unchanged.
+- Lists now store their elements behind `Rc<Vec<Value>>`. Rebinding,
+  capturing, or passing a list copies a reference instead of every element —
+  rebinding a 16k-element list in a loop measured ~27× faster. This changes
+  the public payload type of `Value::List`; see the declared exception in
+  the compatibility guarantees.
+- Functional list updates reuse their buffer through `Rc::make_mut` when
+  the argument is uniquely owned. `append` remains O(n) per call when the
+  list may be aliased — inherent to functional updates under dynamic
+  aliasing — but constants improved ~2× in accumulation workloads.
+
+### Fixed
+
+- The AST mutation-classification match is now exhaustive: adding an
+  `AstKind` variant without deciding whether it can execute code is a
+  compile error rather than a silent default. The rewrite itself caught one
+  unclassified case (member access on arbitrary expressions).
+
 ## 1.12.1 - 2026-08-23
 
 ### Fixed

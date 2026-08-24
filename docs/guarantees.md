@@ -84,6 +84,11 @@ created after a REPL reset; user bindings may shadow its names:
   onward; downstream matchers must handle unknown cases or pin their dependency.
   Version 1.2 adds `AstKind::Member`, `Value::Module`, `ModuleValue`, and the
   contextual `TokenKind::ImportAs` token for aliased imports.
+- One declared exception: UCL 1.13 changes `Value::List`'s payload from
+  `Vec<Value>` to `Rc<Vec<Value>>`. The variant shipped in 1.11 with no known
+  downstream consumers, so the payload change is announced here rather than
+  through a major release; code constructing or destructuring `Value::List`
+  must wrap or unwrap the `Rc` from 1.13 onward.
 
 ## Command line interface
 

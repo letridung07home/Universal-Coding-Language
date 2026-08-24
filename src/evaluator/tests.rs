@@ -1120,13 +1120,24 @@ fn reports_index_out_of_range_and_type_errors() {
 
 #[test]
 fn list_concatenation_produces_a_new_list() {
-    let list = |items: &[i64]| Value::List(items.iter().map(|i| Value::Integer(*i)).collect());
+    let list = |items: &[i64]| {
+        Value::List(std::rc::Rc::new(
+            items
+                .iter()
+                .map(|i| Value::Integer(*i))
+                .collect::<Vec<Value>>(),
+        ))
+    };
     for (source, expected) in [
         ("[1] + [2];", list(&[1, 2])),
         ("[] + [1];", list(&[1])),
         (
             "[1, [2]] + [3];",
-            Value::List(vec![Value::Integer(1), list(&[2]), Value::Integer(3)]),
+            Value::List(std::rc::Rc::new(vec![
+                Value::Integer(1),
+                list(&[2]),
+                Value::Integer(3),
+            ])),
         ),
     ] {
         let (value, sink) = eval(source);
@@ -1152,12 +1163,12 @@ fn appends_elements_functionally() {
     assert!(!sink.has_errors());
     assert_eq!(
         value,
-        Some(Value::List(vec![
+        Some(Value::List(std::rc::Rc::new(vec![
             Value::Integer(1),
             Value::Integer(4),
             Value::Integer(9),
             Value::Integer(16),
-        ]))
+        ])))
     );
 
     // The original list is untouched.
@@ -1169,7 +1180,9 @@ fn appends_elements_functionally() {
     assert!(!sink.has_errors());
     assert_eq!(
         value,
-        Some(Value::List(vec![Value::List(vec![Value::Integer(1)])]))
+        Some(Value::List(std::rc::Rc::new(vec![Value::List(
+            std::rc::Rc::new(vec![Value::Integer(1)])
+        )])))
     );
 }
 
@@ -1842,19 +1855,24 @@ fn a_literal_cannot_recur_through_its_own_variable() {
 #[test]
 fn caps_recursive_function_calls() {
     // Runs on a generous stack so the assertion exercises the call-depth
-    // guard itself rather than the test thread's stack limit.
-    let harness = std::thread::Builder::new()
+    // guard itself rather than the test thread's stack limit. Only a plain
+    // boolean crosses the thread boundary: `Value` contains `Rc`, which is
+    // not `Send`.
+    let hit_depth_guard = std::thread::Builder::new()
         .stack_size(32 * 1024 * 1024)
-        .spawn(|| eval("fn recurse() { recurse(); }; recurse();"))
-        .expect("test harness thread spawns");
-    let (_value, sink) = harness.join().expect("harness thread does not panic");
+        .spawn(|| {
+            let (_value, sink) = eval("fn recurse() { recurse(); }; recurse();");
+            sink.iter().any(|diagnostic| {
+                diagnostic
+                    .message
+                    .contains("function call depth is too deep")
+            })
+        })
+        .expect("test harness thread spawns")
+        .join()
+        .expect("harness thread does not panic");
 
-    assert!(sink.has_errors());
-    assert!(sink.iter().any(|diagnostic| {
-        diagnostic
-            .message
-            .contains("function call depth is too deep")
-    }));
+    assert!(hit_depth_guard);
 }
 
 #[test]

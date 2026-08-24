@@ -6,6 +6,7 @@
 //! guarantees about mutation and equality hold.
 
 use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
 
 use crate::parser::AstNode;
 use crate::source::SourceFile;
@@ -60,7 +61,14 @@ pub enum Value {
     /// A read-only namespace produced by an aliased module import.
     Module(ModuleValue),
     /// An ordered, immutable sequence of values.
-    List(Vec<Value>),
+    ///
+    /// The elements live behind an `Rc` so cloning a list value — rebinding
+    /// it, capturing it in a closure, passing it as an argument — copies a
+    /// reference instead of every element. Functional updates (`append`,
+    /// concatenation, slicing) reuse the shared buffer through
+    /// [`Rc::make_mut`] when the list is not aliased, which keeps the
+    /// accumulate-in-a-loop idiom linear.
+    List(Rc<Vec<Value>>),
 }
 
 /// A callable UCL function value.

@@ -22,6 +22,7 @@
 use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
 use std::collections::HashSet;
+use std::rc::Rc;
 
 use crate::diagnostic::{Diagnostic, DiagnosticSink, Severity};
 use crate::lexer::unescape_string;
@@ -194,6 +195,8 @@ impl Evaluator {
     /// function boundary — leaves iteration to the caller's other checks.
     fn take_loop_signal(&self) -> bool {
         let mut flow = self.pending_flow.borrow_mut();
+        // Exhaustive over `Flow`: a new control-flow signal must decide
+        // here whether it exits the loop or propagates outward.
         match &*flow {
             Some(Flow::Break) => {
                 *flow = None;
@@ -203,7 +206,7 @@ impl Evaluator {
                 *flow = None;
                 false
             }
-            _ => false,
+            Some(Flow::Return(_)) | None => false,
         }
     }
 
@@ -258,7 +261,7 @@ impl Evaluator {
                         return Value::Unit;
                     }
                 }
-                Value::List(values)
+                Value::List(Rc::new(values))
             }
             AstKind::Let { name, value, .. } => {
                 // Spans come from the parser and are valid there, but ASTs
@@ -725,12 +728,18 @@ impl Evaluator {
                                 .take(MAX_LOOP_ITERATIONS as usize + 1)
                                 .collect(),
                         ),
-                        Value::List(mut elements) => {
+                        Value::List(elements) => {
                             // One extra element lets the executor
                             // distinguish a completed loop from one cut
-                            // off by the cap.
-                            elements.truncate(MAX_LOOP_ITERATIONS as usize + 1);
-                            Some(elements)
+                            // off by the cap; the list is shared, so copy
+                            // rather than truncate.
+                            Some(
+                                elements
+                                    .iter()
+                                    .take(MAX_LOOP_ITERATIONS as usize + 1)
+                                    .cloned()
+                                    .collect(),
+                            )
                         }
                         other => {
                             sink.emit(
@@ -1143,7 +1152,7 @@ impl Evaluator {
                             return Value::Unit;
                         }
                         let (start, end) = (*start as usize, *end as usize);
-                        return Value::List(elements[start..end].to_vec());
+                        return Value::List(Rc::new(elements[start..end].to_vec()));
                     }
                     sink.emit(
                         Diagnostic::error(format!(
@@ -1170,11 +1179,15 @@ impl Evaluator {
                 }
                 match &values[0] {
                     Value::List(elements) => {
-                        // Functional: the original list is untouched and
-                        // the result is a fresh list with one more
-                        // element.
-                        let mut appended = elements.clone();
-                        appended.push(values[1].clone());
+                        // Functional: the result is a list with one more
+                        // element and the original is untouched. When the
+                        // argument's buffer is not aliased (the usual
+                        // `items = append(items, x)` case), `make_mut`
+                        // reuses it in place instead of copying every
+                        // element; an aliased list is copied transparently,
+                        // so observable behavior is identical either way.
+                        let mut appended = Rc::clone(elements);
+                        Rc::make_mut(&mut appended).push(values[1].clone());
                         Value::List(appended)
                     }
                     other => {
@@ -1261,9 +1274,9 @@ impl Evaluator {
                         Value::Str(concatenated)
                     }
                     (Value::List(a), Value::List(b)) => {
-                        let mut concatenated = a.clone();
+                        let mut concatenated = a.as_ref().clone();
                         concatenated.extend(b.iter().cloned());
-                        Value::List(concatenated)
+                        Value::List(Rc::new(concatenated))
                     }
                     (l, r) => binary_type_error(operator, &l, &r, span, sink),
                 }
@@ -1392,6 +1405,12 @@ impl Evaluator {
     /// Returns whether evaluating `node` could reassign a binding or call a
     /// function (which may reassign bindings indirectly). Used to decide
     /// whether an append-style assignment may run in place.
+    ///
+    /// The match below is deliberately exhaustive — no `_` arm. Adding an
+    /// `AstKind` variant must force classification here; the compiler
+    /// enforces it. A wildcard once hid `for` loops and `let` initializers
+    /// from this check and made their side effects run twice (fixed in
+    /// 1.12.1).
     fn may_mutate_bindings(node: &AstNode) -> bool {
         match &node.kind {
             AstKind::Call { .. } | AstKind::Assignment { .. } | AstKind::Use { .. } => true,
@@ -1438,7 +1457,22 @@ impl Evaluator {
             AstKind::Index { object, index } => {
                 Self::may_mutate_bindings(object) || Self::may_mutate_bindings(index)
             }
-            _ => false,
+            AstKind::Member { object, .. } => {
+                // The object may be an arbitrary expression, such as a
+                // block whose last statement calls a function.
+                Self::may_mutate_bindings(object)
+            }
+            // Pure literals and names: evaluating them runs no user code.
+            // (`Function` declares a function; its body only runs when the
+            // resulting value is later called.)
+            AstKind::Integer
+            | AstKind::BooleanLiteral(_)
+            | AstKind::StringLiteral
+            | AstKind::Identifier
+            | AstKind::Function { .. }
+            | AstKind::Return { .. }
+            | AstKind::Break
+            | AstKind::Continue => false,
         }
     }
 
