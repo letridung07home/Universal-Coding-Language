@@ -205,7 +205,7 @@ tightest to loosest below:
 |------------|-----------|---------------|--------|-------|
 | 7 (highest) | `^` | integer, integer | integer | exponentiation; the exponent must be non-negative |
 | 6 | `*` `/` `%` | integer, integer | integer | checked arithmetic; `/` and `%` by zero are errors |
-| 5 | `+` `-` | both integers or both strings | integer / string | addition or concatenation; checked arithmetic |
+| 5 | `+` `-` | both integers, both strings, or both lists | integer / string / list | addition, concatenation, or list concatenation; checked arithmetic |
 | 4 | `<` `>` `<=` `>=` | both integers or both strings | boolean | relational comparison, lexicographic for strings |
 | 3 | `==` `!=` | two integers, booleans, or strings | boolean | equality |
 | 2 | `&` | boolean, boolean | boolean | logical and, short-circuiting |
@@ -215,7 +215,8 @@ Because every binary operator is left-associative, `2 ^ 3 ^ 2` is `(2 ^ 3) ^
 2` (that is, `64`), and `a - b - c` is `(a - b) - c`.
 
 `+` is overloaded by operand type: adding two integers performs checked
-addition, and adding two strings concatenates them. Mixing types is an error.
+addition, adding two strings concatenates them, and adding two lists
+concatenates them into a new list. Mixing types is an error.
 
 Every evaluated string value is limited to **8 MiB of UTF-8 bytes**. This limit
 applies to decoded string literals, concatenation results, and strings produced
@@ -273,10 +274,11 @@ The prelude currently provides these built-ins:
 | `lower(string)` | The string converted to lower case. |
 | `contains(haystack, needle)` | A boolean reporting whether the string `haystack` contains the string `needle` as a substring, or whether the list `haystack` contains an element equal to `needle` (using `==`, so nested lists compare element by element). |
 | `int(value)` | An integer parsed from `value`: strings must consist of an optional `+` or `-` sign followed by ASCII decimal digits, with no surrounding whitespace; integers pass through unchanged. Parsing failures, out-of-range values, and non-string arguments are runtime errors. |
-| `find(haystack, needle)` | An integer giving the scalar-value index of the first occurrence of the string `needle` in the string `haystack`, or `-1` if it does not occur. |
+| `find(haystack, needle)` | An integer giving the scalar-value index of the first occurrence of the string `needle` in the string `haystack`, or `-1` if it does not occur. When `haystack` is a list, returns the index of the first element equal to `needle` (using `==`), or `-1`. |
 | `replace(source, pattern, replacement)` | A copy of the string `source` with every occurrence of the string `pattern` replaced by the string `replacement`. An empty `pattern` is a runtime error. |
 | `trim(value)` | A copy of the string `value` with leading and trailing whitespace removed. |
-| `slice(value, start, end)` | The substring of the string `value` from scalar-value index `start` (inclusive) to `end` (exclusive). Indices must satisfy `0 <= start <= end <= len(value)`; violations, including negative indices, are runtime errors. |
+| `slice(value, start, end)` | The substring of the string `value` from scalar-value index `start` (inclusive) to `end` (exclusive), or a new list holding the elements of the list `value` in that range. Indices must satisfy `0 <= start <= end <= len(value)`; violations, including negative indices, are runtime errors. |
+| `append(list, item)` | A new list holding the elements of the list `list` followed by `item`. The original list is untouched: `append` does not mutate. |
 
 For example, `len("hé")` evaluates to `2`, `upper("hé")` evaluates to `"HÉ"`,
 `type(len)` evaluates to `"function"`, `int("-41") + 1` evaluates to

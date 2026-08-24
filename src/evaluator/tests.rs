@@ -1089,11 +1089,132 @@ fn reports_index_out_of_range_and_type_errors() {
 }
 
 #[test]
-fn list_concatenation_is_not_yet_defined() {
-    for source in ["[1] + [2];", "[1, 2] + 3;"] {
+fn list_concatenation_produces_a_new_list() {
+    let list = |items: &[i64]| Value::List(items.iter().map(|i| Value::Integer(*i)).collect());
+    for (source, expected) in [
+        ("[1] + [2];", list(&[1, 2])),
+        ("[] + [1];", list(&[1])),
+        (
+            "[1, [2]] + [3];",
+            Value::List(vec![Value::Integer(1), list(&[2]), Value::Integer(3)]),
+        ),
+    ] {
+        let (value, sink) = eval(source);
+        assert!(!sink.has_errors(), "unexpected error for `{source}`");
+        assert_eq!(value, Some(expected), "for `{source}`");
+    }
+    // Concatenation is functional: neither operand changes.
+    let (value, sink) = eval("let a = [1]; let b = a + [2]; str(a) + \" \" + str(b);");
+    assert!(!sink.has_errors());
+    assert_eq!(value, Some(Value::Str("[1] [1, 2]".to_owned())));
+    // Mixed-type addition remains an error.
+    for source in ["[1, 2] + 3;", "1 + [2];"] {
         let (value, _sink) = eval(source);
         assert_eq!(value, None, "expected an error for `{source}`");
     }
+}
+
+#[test]
+fn appends_elements_functionally() {
+    // The accumulation idiom: build a list inside a loop.
+    let (value, sink) =
+        eval("let items = []; for i in 1..5 { items = append(items, i * i); }; items;");
+    assert!(!sink.has_errors());
+    assert_eq!(
+        value,
+        Some(Value::List(vec![
+            Value::Integer(1),
+            Value::Integer(4),
+            Value::Integer(9),
+            Value::Integer(16),
+        ]))
+    );
+
+    // The original list is untouched.
+    let (value, sink) = eval("let a = [1]; let b = append(a, 2); str(a) + \" \" + str(b);");
+    assert!(!sink.has_errors());
+    assert_eq!(value, Some(Value::Str("[1] [1, 2]".to_owned())));
+
+    let (value, sink) = eval("append([], [1]);");
+    assert!(!sink.has_errors());
+    assert_eq!(
+        value,
+        Some(Value::List(vec![Value::List(vec![Value::Integer(1)])]))
+    );
+}
+
+#[test]
+fn reports_append_arity_and_type_errors() {
+    for source in [
+        "append();",
+        "append([1]);",
+        "append([1], 2, 3);",
+        "append(42, 1);",
+        "append(\"ab\", 1);",
+    ] {
+        let (value, sink) = eval(source);
+        assert_eq!(value, None, "expected an error for `{source}`");
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("`append`")),
+            "for `{source}`"
+        );
+    }
+}
+
+#[test]
+fn slices_and_searches_lists() {
+    for (source, expected) in [
+        ("str(slice([1, 2, 3], 0, 2));", "[1, 2]"),
+        ("str(slice([1, 2, 3], 3, 3));", "[]"),
+        ("str(slice([], 0, 0));", "[]"),
+        ("str(slice([[1], [2]], 1, 2));", "[[2]]"),
+    ] {
+        let (value, sink) = eval(source);
+        assert!(!sink.has_errors(), "unexpected error for `{source}`");
+        assert_eq!(
+            value,
+            Some(Value::Str(expected.to_owned())),
+            "for `{source}`"
+        );
+    }
+    for (source, expected) in [
+        ("find([10, 20, 30], 20);", 1),
+        ("find([10, 20], 99);", -1),
+        ("find([], 1);", -1),
+        // Deep equality: nested lists match element by element.
+        ("find([[1], [2]], [2]);", 1),
+    ] {
+        let (value, sink) = eval(source);
+        assert!(!sink.has_errors(), "unexpected error for `{source}`");
+        assert_eq!(value, Some(Value::Integer(expected)), "for `{source}`");
+    }
+}
+
+#[test]
+fn reports_list_slice_out_of_range_errors() {
+    for source in [
+        "slice([1, 2], -1, 1);",
+        "slice([1, 2], 0, 3);",
+        "slice([1, 2], 2, 1);",
+        "slice([1, 2], true, 1);",
+        "slice(42, 0, 1);",
+    ] {
+        let (value, sink) = eval(source);
+        assert_eq!(value, None, "expected an error for `{source}`");
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("`slice`")),
+            "for `{source}`"
+        );
+    }
+}
+
+#[test]
+fn user_bindings_may_shadow_append() {
+    let (value, sink) = eval("let append = fn(a, b) { a + b; }; append(40, 2);");
+    assert!(!sink.has_errors());
+    assert_eq!(value, Some(Value::Integer(42)));
 }
 
 #[test]

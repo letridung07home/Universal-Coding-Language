@@ -31,6 +31,9 @@ pub enum BuiltinFunction {
     Trim,
     /// Returns the substring between two scalar-value indices.
     Slice,
+    /// Returns a copy of a list with one element added at the end; the
+    /// original list is untouched.
+    Append,
 }
 
 impl BuiltinFunction {
@@ -48,6 +51,7 @@ impl BuiltinFunction {
             Self::Replace => "replace",
             Self::Trim => "trim",
             Self::Slice => "slice",
+            Self::Append => "append",
         }
     }
 
@@ -65,6 +69,7 @@ impl BuiltinFunction {
             Self::Replace,
             Self::Trim,
             Self::Slice,
+            Self::Append,
         ]
         .into_iter()
     }

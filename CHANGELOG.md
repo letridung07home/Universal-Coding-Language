@@ -2,6 +2,22 @@
 
 All notable changes to UCL are documented here.
 
+## 1.12.0 - 2026-08-23
+
+### Added
+
+- List toolkit round 2, completing what 1.9 did for strings:
+  - `append(list, item)` returns a new list with `item` added at the end.
+    It is functional: the original list is untouched, so lists can now be
+    accumulated inside loops (`items = append(items, x);`).
+  - `+` concatenates two lists into a new list, mirroring string
+    concatenation; mixing types remains an error.
+  - `slice(list, start, end)` extracts a sub-list with the same strict
+    bounds checking as string slicing.
+  - `find(list, item)` returns the index of the first element equal to
+    `item` (using `==`, so nested lists compare element by element), or
+    `-1` when absent.
+
 ## 1.11.0 - 2026-08-23
 
 ### Added

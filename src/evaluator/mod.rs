@@ -1022,9 +1022,17 @@ impl Evaluator {
                     );
                     return Value::Unit;
                 }
+                if let Value::List(elements) = haystack {
+                    // List search uses the same equality as `==`, so
+                    // nested lists match element by element.
+                    return Value::Integer(match elements.iter().position(|e| e == needle) {
+                        Some(index) => index as i64,
+                        None => -1,
+                    });
+                }
                 sink.emit(
                     Diagnostic::error(format!(
-                        "`find` expects a string haystack, found `{}`",
+                        "`find` expects a string or list haystack, found `{}`",
                         haystack.type_name()
                     ))
                     .at(span),
@@ -1126,14 +1134,60 @@ impl Evaluator {
                     );
                     return Value::Unit;
                 }
+                if let Value::List(elements) = source {
+                    if let (Value::Integer(start), Value::Integer(end)) = (start_value, end_value) {
+                        let length = elements.len() as i64;
+                        // The same strict bounds as string slicing.
+                        if *start < 0 || *end < 0 || *start > *end || *end > length {
+                            sink.emit(Diagnostic::error("`slice` index out of range").at(span));
+                            return Value::Unit;
+                        }
+                        let (start, end) = (*start as usize, *end as usize);
+                        return Value::List(elements[start..end].to_vec());
+                    }
+                    sink.emit(
+                        Diagnostic::error(format!(
+                            "`slice` expects integer indices, found `{}` and `{}`",
+                            start_value.type_name(),
+                            end_value.type_name()
+                        ))
+                        .at(span),
+                    );
+                    return Value::Unit;
+                }
                 sink.emit(
                     Diagnostic::error(format!(
-                        "`slice` expects a string argument, found `{}`",
+                        "`slice` expects a string or list argument, found `{}`",
                         source.type_name()
                     ))
                     .at(span),
                 );
                 Value::Unit
+            }
+            BuiltinFunction::Append => {
+                if !Self::check_arity(BuiltinFunction::Append.name(), values, 2, span, sink) {
+                    return Value::Unit;
+                }
+                match &values[0] {
+                    Value::List(elements) => {
+                        // Functional: the original list is untouched and
+                        // the result is a fresh list with one more
+                        // element.
+                        let mut appended = elements.clone();
+                        appended.push(values[1].clone());
+                        Value::List(appended)
+                    }
+                    other => {
+                        sink.emit(
+                            Diagnostic::error(format!(
+                                "`append` expects a list argument, found `{}`",
+                                other.type_name()
+                            ))
+                            .at(span),
+                        );
+                        Value::Unit
+                    }
+                }
             }
         }
     }
@@ -1189,7 +1243,8 @@ impl Evaluator {
         use BinaryOperator::*;
         match operator {
             Add => {
-                // `+` is overloaded: integer addition or string concatenation.
+                // `+` is overloaded: integer addition, string concatenation,
+                // or list concatenation.
                 match (left, right) {
                     (Value::Integer(a), Value::Integer(b)) => match a.checked_add(b) {
                         Some(sum) => Value::Integer(sum),
@@ -1204,6 +1259,11 @@ impl Evaluator {
                         concatenated.push_str(&a);
                         concatenated.push_str(&b);
                         Value::Str(concatenated)
+                    }
+                    (Value::List(a), Value::List(b)) => {
+                        let mut concatenated = a.clone();
+                        concatenated.extend(b.iter().cloned());
+                        Value::List(concatenated)
                     }
                     (l, r) => binary_type_error(operator, &l, &r, span, sink),
                 }

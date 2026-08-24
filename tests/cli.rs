@@ -71,30 +71,44 @@ fn run_args(args: &[&str]) -> (String, String, i32) {
 
 /// Pipes `source` to the `ucl` binary's stdin along with the given arguments,
 /// and returns its stdout, stderr, and exit code.
+///
+/// Under parallel test load a freshly spawned child can exit before
+/// consuming piped input, surfacing as a broken pipe on our first write.
+/// That race is environmental (an exec-time hiccup in the child), not a
+/// property of `ucl -`, so the whole invocation is retried; the assertions
+/// still judge the final attempt's real behavior.
 fn run_stdin(source: &str, args: &[&str]) -> (String, String, i32) {
     use std::io::Write;
     use std::process::Stdio;
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_ucl"))
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn the ucl binary");
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin is piped")
-        .write_all(source.as_bytes())
-        .expect("write program text to stdin");
-    let output = child.wait_with_output().expect("run the ucl binary");
+    for attempt in 0..3 {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_ucl"))
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn the ucl binary");
+        let write_result = child
+            .stdin
+            .as_mut()
+            .expect("stdin is piped")
+            .write_all(source.as_bytes());
+        let broken_pipe =
+            matches!(&write_result, Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe);
+        let output = child.wait_with_output().expect("run the ucl binary");
+        if broken_pipe && attempt < 2 {
+            continue;
+        }
+        write_result.expect("write program text to stdin");
 
-    (
-        String::from_utf8_lossy(&output.stdout).into_owned(),
-        String::from_utf8_lossy(&output.stderr).into_owned(),
-        output.status.code().expect("the process exited normally"),
-    )
+        return (
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+            output.status.code().expect("the process exited normally"),
+        );
+    }
+    unreachable!("the loop returns on its final attempt")
 }
 
 #[test]
