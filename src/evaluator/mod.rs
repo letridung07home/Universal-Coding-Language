@@ -1412,6 +1412,23 @@ impl Evaluator {
             AstKind::While { condition, body } => {
                 Self::may_mutate_bindings(condition) || Self::may_mutate_bindings(body)
             }
+            AstKind::For {
+                variable: _,
+                start,
+                end,
+                body,
+            } => {
+                // The bounds are expressions like any other; the loop body
+                // runs when the enclosing expression evaluates.
+                start.as_deref().is_some_and(Self::may_mutate_bindings)
+                    || Self::may_mutate_bindings(end)
+                    || Self::may_mutate_bindings(body)
+            }
+            AstKind::Let { value, .. } => {
+                // Declaring a binding evaluates its initializer, which may
+                // call functions or assign.
+                Self::may_mutate_bindings(value)
+            }
             AstKind::Unary { operand, .. } => Self::may_mutate_bindings(operand),
             AstKind::Binary { left, right, .. } => {
                 Self::may_mutate_bindings(left) || Self::may_mutate_bindings(right)

@@ -1,6 +1,36 @@
 use super::*;
 use crate::lexer::Lexer;
 use crate::parser::Parser;
+#[test]
+fn append_fast_path_treats_for_loops_and_let_initializers_as_mutating() {
+    // `name = name + <expr>` takes an in-place fast path only when the
+    // right side cannot mutate bindings; a non-string result then falls
+    // back to general evaluation, which re-runs the expression. Anything
+    // that executes code must therefore be flagged as mutating, or those
+    // side effects happen twice. `for` loops and `let` initializers were
+    // once invisible to the check.
+    for source in [
+        "s + { for i in 0..3 { t = t + 1; }; [] };",
+        "s + { let q = f(); [] };",
+        "s + { if true { f(); }; [] };",
+    ] {
+        let source = SourceFile::new("probe.ucl", source);
+        let tokens = Lexer::new(&source).tokenize(&mut DiagnosticSink::new());
+        let ast = Parser::new(tokens)
+            .parse(&mut DiagnosticSink::new())
+            .expect("parses");
+        let AstKind::Program { statements } = &ast.kind else {
+            panic!("expected a program")
+        };
+        let AstKind::Binary { right, .. } = &statements[0].kind else {
+            panic!("expected a binary expression")
+        };
+        assert!(
+            Evaluator::may_mutate_bindings(right),
+            "a block executing code must count as mutating"
+        );
+    }
+}
 
 fn eval(source_text: &str) -> (Option<Value>, DiagnosticSink) {
     let source = SourceFile::new("test.ucl", source_text);
