@@ -108,3 +108,8 @@ Refactor work tracked for future releases; none changes language behavior:
       via an in-place fast path; a functional update still copies when the
       list may be aliased, which is inherent to dynamic aliasing (UCL 1.13,
       refined in 1.15)
+- [x] Charge every value-copying operation against the cumulative
+      allocation budget — derived-string built-ins and list concatenation
+      included — with in-place fast paths keeping accumulation idioms
+      linear, and preserve fuzz artifacts when a nightly run fails
+      (UCL 1.16)

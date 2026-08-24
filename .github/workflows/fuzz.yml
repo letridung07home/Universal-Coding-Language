@@ -65,3 +65,14 @@ jobs:
         # bounded inputs rather than genuine bugs.
         run: cargo +nightly fuzz run ${{ matrix.target }} -- -jobs=4 -workers=4 -max_total_time=${{ steps.budget.outputs.seconds }} -rss_limit_mb=4096 -malloc_limit_mb=1024 -timeout=60
         working-directory: fuzz
+
+      - name: Upload fuzz artifacts on failure
+        # libFuzzer writes the offending input to fuzz/artifacts before
+        # failing; preserving it makes the run debuggable after the fact
+        # (the v1.15 timeout input was lost because nothing uploaded it).
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/
+          if-no-files-found: ignore

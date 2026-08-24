@@ -2,6 +2,37 @@
 
 All notable changes to UCL are documented here.
 
+## 1.16.0 - 2026-08-24
+
+### Fixed
+
+- The nightly fuzz run timed out again despite the 1.15 allocation budget:
+  several value-copying operations were still uncharged, so loops could
+  rebuild large values hundreds of thousands of times while the cumulative
+  budget barely moved. The budget now charges every operation whose cost
+  scales with value size: `upper` and `lower` charge the bytes they copy,
+  `trim` and `slice` (string and list forms) charge their results, and list
+  concatenation charges both operands instead of only the appended side.
+  The runaway input family now trips the budget within milliseconds.
+
+### Added
+
+- An in-place fast path for `items = items + [x]` assignment, mirroring the
+  string and `append` fast paths: list accumulation through `+` stays
+  linear in total work even though general concatenation is now charged
+  honestly. Aliased lists still copy transparently; observable semantics
+  are unchanged.
+- The Fuzz workflow uploads libFuzzer artifacts on failure, so future
+  timeout inputs survive the run and can be reproduced (the v1.15 timeout
+  input was lost because nothing preserved it).
+
+### Documented
+
+- Pure read work (comparisons, membership tests) over very large values in
+  long loops remains bounded by the loop cap times value size rather than
+  the allocation budget; this is now stated explicitly in the
+  specification.
+
 ## 1.15.0 - 2026-08-24
 
 ### Added

@@ -824,12 +824,13 @@ impl Evaluator {
                     }
                 };
                 // Fast paths: `name = name + <pure expression>` appends to the
-                // existing string in place, and `name = append(name, <pure
-                // expression>)` pushes onto the existing list in place,
-                // instead of rebuilding the value from a fresh copy on every
-                // iteration. This keeps accumulation loops such as
-                // `acc = acc + "!"` or `items = append(items, x)` linear in
-                // total work.
+                // existing string in place (or extends the existing list when
+                // the right operand is a list literal), and `name =
+                // append(name, <pure expression>)` pushes onto the existing
+                // list in place, instead of rebuilding the value from a fresh
+                // copy on every iteration. This keeps accumulation loops such
+                // as `acc = acc + "!"`, `items = append(items, x)`, or
+                // `items = items + [x]` linear in total work.
                 if let AstKind::Binary {
                     operator: BinaryOperator::Add,
                     left,
@@ -850,6 +851,19 @@ impl Evaluator {
                             sink,
                             depth,
                         ) {
+                            return value;
+                        }
+                        if let AstKind::List { elements } = &right.kind
+                            && let Some(value) = self.try_list_concat_in_place(
+                                &name,
+                                value.span,
+                                elements,
+                                source,
+                                environment,
+                                sink,
+                                depth,
+                            )
+                        {
                             return value;
                         }
                     }
@@ -966,7 +980,9 @@ impl Evaluator {
                             BuiltinFunction::Upper => value.to_uppercase(),
                             _ => value.to_lowercase(),
                         };
-                        if !self.check_string_size(mapped.len(), span, sink) {
+                        if !self.check_string_size(mapped.len(), span, sink)
+                            || !self.charge_allocation(mapped.len(), span, sink)
+                        {
                             return Value::Unit;
                         }
                         Value::Str(mapped)
@@ -1148,7 +1164,13 @@ impl Evaluator {
                     return Value::Unit;
                 }
                 match &values[0] {
-                    Value::Str(value) => Value::Str(value.trim().to_owned()),
+                    Value::Str(value) => {
+                        let trimmed = value.trim().to_owned();
+                        if !self.charge_allocation(trimmed.len(), span, sink) {
+                            return Value::Unit;
+                        }
+                        Value::Str(trimmed)
+                    }
                     other => {
                         sink.emit(
                             Diagnostic::error(format!(
@@ -1182,6 +1204,9 @@ impl Evaluator {
                             .skip(start)
                             .take(end - start)
                             .collect::<String>();
+                        if !self.charge_allocation(sliced.len(), span, sink) {
+                            return Value::Unit;
+                        }
                         return Value::Str(sliced);
                     }
                     sink.emit(
@@ -1203,6 +1228,10 @@ impl Evaluator {
                             return Value::Unit;
                         }
                         let (start, end) = (*start as usize, *end as usize);
+                        let charge = end - start;
+                        if !self.charge_allocation(charge, span, sink) {
+                            return Value::Unit;
+                        }
                         return Value::List(Rc::new(elements[start..end].to_vec()));
                     }
                     sink.emit(
@@ -1331,8 +1360,11 @@ impl Evaluator {
                         Value::Str(concatenated)
                     }
                     (Value::List(a), Value::List(b)) => {
-                        // Growth-based charge: see MAX_TOTAL_VALUE_BYTES.
-                        if !self.charge_allocation(b.len(), span, sink) {
+                        // The result copies every element of both operands;
+                        // the budget charges that copy. See
+                        // MAX_TOTAL_VALUE_BYTES.
+                        let charge = a.len().saturating_add(b.len());
+                        if !self.charge_allocation(charge, span, sink) {
                             return Value::Unit;
                         }
                         let mut concatenated = a.as_ref().clone();
@@ -1648,6 +1680,54 @@ impl Evaluator {
             return Some(Value::Unit);
         }
         Rc::make_mut(elements).push(appended);
+        Some(slot.clone())
+    }
+
+    /// Extends a list binding in place for `name = name + [e0, e1, ...]`
+    /// where every element expression is pure.
+    ///
+    /// Mirrors [`Evaluator::try_list_append_in_place`]: when the binding's
+    /// list is uniquely owned the extension reuses its buffer and charges
+    /// only the added elements; when it may be aliased, `Rc::make_mut`
+    /// copies transparently and the budget is charged the copy. Returns
+    /// `None` - deferring to the general concatenation path with unchanged
+    /// diagnostics - whenever the shape or types do not match;
+    /// re-evaluating there is safe because the elements cannot mutate
+    /// bindings.
+    #[allow(clippy::too_many_arguments)]
+    fn try_list_concat_in_place(
+        &self,
+        name: &str,
+        expression_span: Span,
+        element_expressions: &[AstNode],
+        source: &SourceFile,
+        environment: &mut Environment,
+        sink: &mut DiagnosticSink,
+        depth: usize,
+    ) -> Option<Value> {
+        let mut appended = Vec::with_capacity(element_expressions.len());
+        for element in element_expressions {
+            appended.push(self.eval(element, source, environment, sink, depth + 1));
+        }
+        let slot = environment
+            .scopes
+            .iter_mut()
+            .rev()
+            .find_map(|scope| scope.get_mut(name))?;
+        let Value::List(elements) = slot else {
+            // Not a list binding (or a short-circuited operand): the general
+            // path owns this case's diagnostics.
+            return None;
+        };
+        let charge = if Rc::strong_count(elements) == 1 {
+            appended.len()
+        } else {
+            elements.len().saturating_add(appended.len())
+        };
+        if !self.charge_allocation(charge, expression_span, sink) {
+            return Some(Value::Unit);
+        }
+        Rc::make_mut(elements).extend(appended);
         Some(slot.clone())
     }
 }

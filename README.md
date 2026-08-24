@@ -199,7 +199,9 @@ stdin to stdout, supports CI checks with `--check`, and preserves comments.
 UCL 1.15 adds a deterministic cumulative allocation budget that stops
 pathological accumulation programs quickly, makes list accumulation through
 assignment linear in total work, and raises the fuzz workflow's per-run
-timeout to 60 seconds. Future directions are sketched in the
+timeout to 60 seconds; UCL 1.16 extends that budget to cover every
+value-copying built-in and list concatenation, and preserves fuzz artifacts
+when a nightly run fails. Future directions are sketched in the
 [project roadmap](docs/roadmap.md).
 
 ## Contributing

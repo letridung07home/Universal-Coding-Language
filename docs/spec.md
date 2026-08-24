@@ -372,13 +372,19 @@ A single loop may run at most a fixed number of iterations (currently
 that never becomes `false` cannot hang the interpreter.
 
 Evaluation also carries a deterministic **cumulative allocation budget**
-(currently 256 MiB): every string operation charges the UTF-8 bytes it
-copies, and list growth charges the newly added elements. Exceeding the
-budget aborts evaluation with an error, so programs whose work grows
-quadratically — such as repeatedly concatenating onto a growing string —
-stop quickly instead of running unbounded. Ordinary accumulation through
-`acc = acc + text` and `items = append(items, x)` assignments is linear and
-stays far below the budget.
+(currently 256 MiB): every operation that builds new value data charges its
+cost — string concatenation and case mapping charge the bytes they copy,
+`trim`, `slice`, and `replace` charge their result, and list concatenation
+charges every element copied. Exceeding the budget aborts evaluation with
+an error, so programs whose work grows quadratically — such as repeatedly
+concatenating onto a growing string or re-mapping a large one — stop
+quickly instead of running unbounded. Ordinary accumulation through
+`acc = acc + text`, `items = append(items, x)`, and `items = items + [x]`
+assignments is linear and stays far below the budget.
+
+Work that only *reads* existing values is not charged: comparing or
+searching a very large value inside a long loop stays bounded by the loop
+cap times the value size, but may still take wall-clock time.
 
 ### 4.7 For loops
 

@@ -2025,3 +2025,72 @@ fn list_append_fast_path_preserves_aliased_semantics() {
     assert!(!sink.has_errors());
     assert_eq!(value, Some(Value::Str("[1, 2][1]".to_owned())));
 }
+
+#[test]
+fn allocation_budget_bounds_runaway_case_mapping() {
+    // `upper` copies the whole string on every call; the budget charges
+    // that copy, so a loop re-mapping a large string stops early.
+    let (value, sink) = eval(concat!(
+        r#"let s = "x"; for i in 0..21 { s = s + s; };"#,
+        " while true { s = upper(s); };"
+    ));
+    assert!(sink.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("evaluation exceeded its total allocation budget")
+    }));
+    assert_eq!(value, None);
+}
+
+#[test]
+fn allocation_budget_bounds_runaway_slicing() {
+    // `slice` builds a fresh value per call; the budget charges it.
+    let (value, sink) = eval(
+        r#"let items = []; for i in 0..1000 { items = append(items, i); }; while true { items = slice(items, 0, len(items)); };"#,
+    );
+    assert!(sink.iter().any(|diagnostic| {
+        let message = &diagnostic.message;
+        message.contains("total allocation budget")
+            || message.contains("loop exceeded the maximum number of iterations")
+    }));
+    assert_eq!(value, None);
+}
+
+#[test]
+fn list_concat_accumulation_is_linear_through_the_fast_path() {
+    // `items = items + [x]` extends the binding in place; 100,000
+    // iterations must finish quickly without tripping any limit.
+    let started = std::time::Instant::now();
+    let (value, sink) =
+        eval("let items = []; for i in 0..100000 { items = items + [i]; }; len(items);");
+    assert!(!sink.has_errors(), "unexpected diagnostics");
+    assert_eq!(value, Some(Value::Integer(100000)));
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "`+` accumulation should be linear, took {:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn list_concat_fast_path_preserves_aliased_semantics() {
+    // An aliased list must be copied, not mutated: `b` keeps pointing at
+    // the original even though assignment takes the fast path.
+    let (value, sink) = eval("let a = [1]; let b = a; a = a + [2]; str(a) + str(b);");
+    assert!(!sink.has_errors());
+    assert_eq!(value, Some(Value::Str("[1, 2][1]".to_owned())));
+}
+
+#[test]
+fn list_concat_charges_aliased_copies() {
+    // Aliasing inside the loop forces a full copy per iteration; the
+    // budget charges each copy and stops the loop early.
+    let (value, sink) =
+        eval("let items = [0]; while true { let alias = items; items = items + [1]; };");
+    assert!(sink.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("evaluation exceeded its total allocation budget")
+    }));
+    assert_eq!(value, None);
+}
