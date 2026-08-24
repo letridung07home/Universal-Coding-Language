@@ -371,6 +371,15 @@ A single loop may run at most a fixed number of iterations (currently
 100,000); exceeding that bound aborts the loop with an error, so a condition
 that never becomes `false` cannot hang the interpreter.
 
+Evaluation also carries a deterministic **cumulative allocation budget**
+(currently 256 MiB): every string operation charges the UTF-8 bytes it
+copies, and list growth charges the newly added elements. Exceeding the
+budget aborts evaluation with an error, so programs whose work grows
+quadratically — such as repeatedly concatenating onto a growing string —
+stop quickly instead of running unbounded. Ordinary accumulation through
+`acc = acc + text` and `items = append(items, x)` assignments is linear and
+stays far below the budget.
+
 ### 4.7 For loops
 
 ```

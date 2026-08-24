@@ -84,6 +84,11 @@ created after a REPL reset; user bindings may shadow its names:
   onward; downstream matchers must handle unknown cases or pin their dependency.
   Version 1.2 adds `AstKind::Member`, `Value::Module`, `ModuleValue`, and the
   contextual `TokenKind::ImportAs` token for aliased imports.
+- Deterministic resource limits are part of the language contract: the
+  8 MiB string-value limit, the 100,000-iteration loop cap, and — added in
+  UCL 1.15 — the 256 MiB cumulative allocation budget over value data built
+  during one evaluation. Programs exceeding a limit fail with the
+  corresponding error; the constants may change only in declared releases.
 - One declared exception: UCL 1.13 changes `Value::List`'s payload from
   `Vec<Value>` to `Rc<Vec<Value>>`. The variant shipped in 1.11 with no known
   downstream consumers, so the payload change is announced here rather than

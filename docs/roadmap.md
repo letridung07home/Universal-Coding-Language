@@ -104,6 +104,7 @@ Refactor work tracked for future releases; none changes language behavior:
 - [x] Move list storage behind shared references (`Rc<Vec<Value>>`) so
       rebinding, capturing, and passing lists copy a reference instead of
       every element (~27× faster list rebinding in the 1.13 gate). Note:
-      `append` itself remains O(n) per call by design — a functional update
-      must copy when aliasing is possible — but it reuses its buffer through
-      `Rc::make_mut` whenever the argument is uniquely owned (UCL 1.13)
+      `append` through assignment became linear in total work in UCL 1.15
+      via an in-place fast path; a functional update still copies when the
+      list may be aliased, which is inherent to dynamic aliasing (UCL 1.13,
+      refined in 1.15)

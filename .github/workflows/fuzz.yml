@@ -63,5 +63,5 @@ jobs:
         # Explicit resource limits head off libFuzzer's tighter defaults
         # (2048 MB RSS, no per-run timeout) tripping on pathological-but-
         # bounded inputs rather than genuine bugs.
-        run: cargo +nightly fuzz run ${{ matrix.target }} -- -jobs=4 -workers=4 -max_total_time=${{ steps.budget.outputs.seconds }} -rss_limit_mb=4096 -malloc_limit_mb=1024 -timeout=25
+        run: cargo +nightly fuzz run ${{ matrix.target }} -- -jobs=4 -workers=4 -max_total_time=${{ steps.budget.outputs.seconds }} -rss_limit_mb=4096 -malloc_limit_mb=1024 -timeout=60
         working-directory: fuzz

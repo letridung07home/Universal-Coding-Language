@@ -62,6 +62,23 @@ const MAX_LOOP_ITERATIONS: u64 = 100_000;
 /// value returned by the evaluator has the same deterministic bound.
 const MAX_STRING_BYTES: usize = 8 * 1024 * 1024;
 
+/// The cumulative byte budget for value data built during one evaluation.
+///
+/// Per-loop iteration caps bound how many times code runs, not how much
+/// data each run moves: a capped loop whose body concatenates a growing
+/// string performs quadratic work and can take tens of seconds even though
+/// every individual operation is legal and bounded. This budget charges the
+/// data cost of building values — UTF-8 bytes for strings, element counts
+/// for lists — across the whole evaluation, so total work stays
+/// deterministic and small regardless of program shape.
+///
+/// Charging follows each operation's real data movement: string operations
+/// charge the UTF-8 bytes they copy, so accumulate-in-a-loop concatenation
+/// — quadratic in practice — trips the budget within a fraction of a
+/// second. List growth charges only newly added elements, so ordinary list
+/// building stays unaffected at any practical size.
+const MAX_TOTAL_VALUE_BYTES: usize = 256 * 1024 * 1024;
+
 /// The maximum number of active UCL function calls.
 ///
 /// This prevents recursive programs from exhausting the host call stack.
@@ -88,6 +105,9 @@ pub struct Evaluator {
     /// Once set, remaining work in the current evaluation is skipped so one
     /// resource error cannot cascade into unrelated type errors or more work.
     resource_exhausted: Cell<bool>,
+    /// Cumulative bytes of value data built so far in this evaluation,
+    /// charged against [`MAX_TOTAL_VALUE_BYTES`].
+    allocated_bytes: Cell<usize>,
     /// A control-flow signal executed by the innermost active construct,
     /// waiting to be consumed at that construct's boundary.
     pending_flow: RefCell<Option<Flow>>,
@@ -101,6 +121,7 @@ impl Evaluator {
         Self {
             call_depth: Cell::new(0),
             resource_exhausted: Cell::new(false),
+            allocated_bytes: Cell::new(0),
             pending_flow: RefCell::new(None),
         }
     }
@@ -159,6 +180,7 @@ impl Evaluator {
     ) -> Option<Value> {
         self.call_depth.set(0);
         self.resource_exhausted.set(false);
+        self.allocated_bytes.set(0);
         self.pending_flow.borrow_mut().take();
         let baseline = sink.len();
         let value = self.eval(root, source, environment, sink, 0);
@@ -801,10 +823,13 @@ impl Evaluator {
                         return Value::Unit;
                     }
                 };
-                // Fast path: `name = name + <pure expression>` appends to the
-                // existing string in place instead of rebuilding it from a
-                // fresh copy on every iteration. This keeps accumulation loops
-                // such as `acc = acc + "!"` linear in total work.
+                // Fast paths: `name = name + <pure expression>` appends to the
+                // existing string in place, and `name = append(name, <pure
+                // expression>)` pushes onto the existing list in place,
+                // instead of rebuilding the value from a fresh copy on every
+                // iteration. This keeps accumulation loops such as
+                // `acc = acc + "!"` or `items = append(items, x)` linear in
+                // total work.
                 if let AstKind::Binary {
                     operator: BinaryOperator::Add,
                     left,
@@ -827,6 +852,28 @@ impl Evaluator {
                         ) {
                             return value;
                         }
+                    }
+                }
+                // List fast path: `name = append(name, <pure expression>)`.
+                if let AstKind::Call { callee, arguments } = &value.kind
+                    && arguments.len() == 2
+                    && matches!(callee.kind, AstKind::Identifier)
+                    && source.slice(callee.span) == Some(BuiltinFunction::Append.name())
+                    && matches!(arguments[0].kind, AstKind::Identifier)
+                    && source.slice(arguments[0].span) == Some(name.as_str())
+                    && !Self::may_mutate_bindings(&arguments[1])
+                    && environment.lookup(&name).is_some()
+                {
+                    if let Some(value) = self.try_list_append_in_place(
+                        &name,
+                        value.span,
+                        &arguments[1],
+                        source,
+                        environment,
+                        sink,
+                        depth,
+                    ) {
+                        return value;
                     }
                 }
                 let value = self.eval(value, source, environment, sink, depth + 1);
@@ -1063,7 +1110,11 @@ impl Evaluator {
                                 );
                                 return Value::Unit;
                             }
-                            return Value::Str(source.replace(pattern.as_str(), replacement));
+                            let replaced = source.replace(pattern.as_str(), replacement);
+                            if !self.charge_allocation(replaced.len(), span, sink) {
+                                return Value::Unit;
+                            }
+                            return Value::Str(replaced);
                         }
                         sink.emit(
                             Diagnostic::error(format!(
@@ -1186,6 +1237,10 @@ impl Evaluator {
                         // reuses it in place instead of copying every
                         // element; an aliased list is copied transparently,
                         // so observable behavior is identical either way.
+                        // Growth-based charge: see MAX_TOTAL_VALUE_BYTES.
+                        if !self.charge_allocation(1, span, sink) {
+                            return Value::Unit;
+                        }
                         let mut appended = Rc::clone(elements);
                         Rc::make_mut(&mut appended).push(values[1].clone());
                         Value::List(appended)
@@ -1265,7 +1320,9 @@ impl Evaluator {
                     },
                     (Value::Str(a), Value::Str(b)) => {
                         let length = a.len().saturating_add(b.len());
-                        if !self.check_string_size(length, span, sink) {
+                        if !self.check_string_size(length, span, sink)
+                            || !self.charge_allocation(length, span, sink)
+                        {
                             return Value::Unit;
                         }
                         let mut concatenated = String::with_capacity(length);
@@ -1274,6 +1331,10 @@ impl Evaluator {
                         Value::Str(concatenated)
                     }
                     (Value::List(a), Value::List(b)) => {
+                        // Growth-based charge: see MAX_TOTAL_VALUE_BYTES.
+                        if !self.charge_allocation(b.len(), span, sink) {
+                            return Value::Unit;
+                        }
                         let mut concatenated = a.as_ref().clone();
                         concatenated.extend(b.iter().cloned());
                         Value::List(Rc::new(concatenated))
@@ -1402,6 +1463,30 @@ impl Evaluator {
         false
     }
 
+    /// Charges `bytes` of newly built value data against the evaluation's
+    /// cumulative allocation budget.
+    ///
+    /// Strings are charged their UTF-8 length; lists are charged element
+    /// counts (the cost model is documented on
+    /// [`MAX_TOTAL_VALUE_BYTES`]). When the budget is exhausted the
+    /// resource-exhausted flag is set — every loop and expression site
+    /// already stops on it — and an error is reported once.
+    fn charge_allocation(&self, bytes: usize, span: Span, sink: &mut DiagnosticSink) -> bool {
+        let total = self.allocated_bytes.get().saturating_add(bytes);
+        if total > MAX_TOTAL_VALUE_BYTES {
+            self.resource_exhausted.set(true);
+            sink.emit(
+                Diagnostic::error(format!(
+                    "evaluation exceeded its total allocation budget of {MAX_TOTAL_VALUE_BYTES} bytes"
+                ))
+                .at(span),
+            );
+            return false;
+        }
+        self.allocated_bytes.set(total);
+        true
+    }
+
     /// Returns whether evaluating `node` could reassign a binding or call a
     /// function (which may reassign bindings indirectly). Used to decide
     /// whether an append-style assignment may run in place.
@@ -1508,7 +1593,9 @@ impl Evaluator {
             return None;
         };
         let length = existing.len().saturating_add(appendage.len());
-        if !self.check_string_size(length, expression_span, sink) {
+        if !self.check_string_size(length, expression_span, sink)
+            || !self.charge_allocation(length, expression_span, sink)
+        {
             return Some(Value::Unit);
         }
         let Value::Str(existing) = slot else {
@@ -1519,6 +1606,49 @@ impl Evaluator {
         };
         existing.push_str(&appendage);
         Some(Value::Str(existing.clone()))
+    }
+
+    /// Appends to a list binding in place for `name = append(name, expr)`.
+    ///
+    /// The binding's slot is the sole owner of the list unless the program
+    /// aliased it (another `let`, a capture, or an argument); when aliased,
+    /// `Rc::make_mut` copies transparently and the allocation budget is
+    /// charged the copy. Returns `None` — deferring to the general
+    /// assignment path with unchanged diagnostics — whenever the shape or
+    /// types do not match; re-evaluating `expr` there is safe because it
+    /// cannot mutate bindings.
+    #[allow(clippy::too_many_arguments)]
+    fn try_list_append_in_place(
+        &self,
+        name: &str,
+        expression_span: Span,
+        expr: &AstNode,
+        source: &SourceFile,
+        environment: &mut Environment,
+        sink: &mut DiagnosticSink,
+        depth: usize,
+    ) -> Option<Value> {
+        let appended = self.eval(expr, source, environment, sink, depth + 1);
+        let slot = environment
+            .scopes
+            .iter_mut()
+            .rev()
+            .find_map(|scope| scope.get_mut(name))?;
+        let Value::List(elements) = slot else {
+            // Not a list binding (or a short-circuited operand): the general
+            // path owns this case's diagnostics.
+            return None;
+        };
+        let charge = if Rc::strong_count(elements) == 1 {
+            1
+        } else {
+            elements.len().saturating_add(1)
+        };
+        if !self.charge_allocation(charge, expression_span, sink) {
+            return Some(Value::Unit);
+        }
+        Rc::make_mut(elements).push(appended);
+        Some(slot.clone())
     }
 }
 

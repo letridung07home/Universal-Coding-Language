@@ -193,10 +193,14 @@ equality, and `for` iteration, UCL 1.12 completes the list toolkit
 with functional `append`, list concatenation through `+`, and list support
 in the `slice` and `find` built-ins, and UCL 1.13 is an internal-quality
 release that makes AST classification compiler-enforced and stores lists
-behind shared references, and UCL 1.14 completes the roadmap with a
+behind shared references, UCL 1.14 completes the roadmap with a
 deterministic source formatter: `ucl fmt` rewrites files in place, pipes
 stdin to stdout, supports CI checks with `--check`, and preserves comments.
-Future directions are sketched in the [project roadmap](docs/roadmap.md).
+UCL 1.15 adds a deterministic cumulative allocation budget that stops
+pathological accumulation programs quickly, makes list accumulation through
+assignment linear in total work, and raises the fuzz workflow's per-run
+timeout to 60 seconds. Future directions are sketched in the
+[project roadmap](docs/roadmap.md).
 
 ## Contributing
 

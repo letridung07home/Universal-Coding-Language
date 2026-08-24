@@ -141,9 +141,11 @@ fn regression_append_loop_with_inert_counter_terminates() {
             "evaluation of `{source}` should be bounded"
         );
         assert!(sink.iter().any(|diagnostic| {
-            diagnostic
-                .message
-                .contains("loop exceeded the maximum number of iterations")
+            let message = &diagnostic.message;
+            // Either deterministic guard may fire first: the loop cap
+            // or the cumulative allocation budget.
+            message.contains("loop exceeded the maximum number of iterations")
+                || message.contains("total allocation budget")
         }));
         assert_eq!(value, None);
     }
@@ -1965,4 +1967,61 @@ fn an_error_on_one_line_does_not_poison_the_next() {
         run_line(&evaluator, &mut environment, "x + 1;", &mut sink),
         Some(Value::Integer(2))
     );
+}
+
+#[test]
+fn allocation_budget_bounds_runaway_string_accumulation() {
+    // Fuzz-found shape (CI timeout in the v1.14 fuzz run): an infinite
+    // loop whose body concatenates a growing string. The cumulative
+    // allocation budget must stop it long before the loop cap.
+    let started = std::time::Instant::now();
+    let (value, sink) = eval(r#"let acc = ""; while true { acc = acc + "0123456789"; };"#);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "the allocation budget must stop runaway accumulation quickly"
+    );
+    assert!(sink.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("evaluation exceeded its total allocation budget")
+    }));
+    assert_eq!(value, None);
+}
+
+#[test]
+fn allocation_budget_bounds_aliased_list_copying() {
+    // Aliasing the list inside the loop forces a full copy per append;
+    // the budget charges that copy and stops the loop early.
+    let (value, sink) =
+        eval("let items = [0]; while true { let alias = items; items = append(items, 1); };");
+    assert!(sink.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("evaluation exceeded its total allocation budget")
+    }));
+    assert_eq!(value, None);
+}
+
+#[test]
+fn large_but_ordinary_accumulation_stays_within_the_budget() {
+    // The accumulate idiom is linear through the in-place append fast
+    // path and charges only growth; it must complete without errors.
+    let (value, sink) =
+        eval("let items = []; for i in 0..50000 { items = append(items, i); }; len(items);");
+    assert!(
+        !sink.has_errors(),
+        "unexpected diagnostics: {:?}",
+        sink.len()
+    );
+    assert_eq!(value, Some(Value::Integer(50000)));
+}
+
+#[test]
+fn list_append_fast_path_preserves_aliased_semantics() {
+    // When another binding holds the list, appending must copy: the
+    // original stays untouched even though assignment goes through the
+    // in-place fast path.
+    let (value, sink) = eval("let a = [1]; let b = a; a = append(a, 2); str(a) + str(b);");
+    assert!(!sink.has_errors());
+    assert_eq!(value, Some(Value::Str("[1, 2][1]".to_owned())));
 }

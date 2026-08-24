@@ -2,6 +2,32 @@
 
 All notable changes to UCL are documented here.
 
+## 1.15.0 - 2026-08-24
+
+### Added
+
+- A deterministic cumulative allocation budget (256 MiB) over the value data
+  built during one evaluation. String operations charge the bytes they copy;
+  list growth charges new elements. Exceeding the budget stops evaluation
+  with `evaluation exceeded its total allocation budget of ... bytes`,
+  joining the existing string-size, loop-count, call-depth, and nesting
+  limits. The limit is documented in the specification and covered by the
+  compatibility guarantees.
+
+### Fixed
+
+- The GitHub Actions fuzz run timed out on an input that loops forever while
+  concatenating onto a growing string: legal operations, quadratic total
+  work, tens of seconds under sanitizer instrumentation. The allocation
+  budget now stops that entire input family within milliseconds.
+- List accumulation through assignment (`items = append(items, x)`) is now
+  linear in total work via an in-place fast path mirroring the existing
+  string one; previously each append copied the whole list (100,000 appends:
+  minutes before, ~80 ms now). Aliased lists still copy transparently, so
+  observable semantics are unchanged.
+- The fuzz workflow's per-run timeout rose from 25 to 60 seconds for margin
+  against slow-but-bounded inputs.
+
 ## 1.14.0 - 2026-08-24
 
 ### Added
