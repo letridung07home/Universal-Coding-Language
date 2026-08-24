@@ -319,86 +319,10 @@ impl Evaluator {
                 }
             }
             AstKind::Member { object, member } => {
-                let object = self.eval(object, source, environment, sink, depth + 1);
-                let member_span = *member;
-                let Some(member) = source.slice(member_span) else {
-                    sink.emit(Diagnostic::error("invalid module member span").at(node.span));
-                    return Value::Unit;
-                };
-                match object {
-                    Value::Module(module) => match module.get(member) {
-                        Some(value) => value.clone(),
-                        None => {
-                            sink.emit(
-                                Diagnostic::error(format!(
-                                    "module has no exported member `{member}`"
-                                ))
-                                .at(member_span),
-                            );
-                            Value::Unit
-                        }
-                    },
-                    other => {
-                        sink.emit(
-                            Diagnostic::error(format!(
-                                "cannot access member `{member}` on value of type `{}`",
-                                other.type_name()
-                            ))
-                            .at(node.span),
-                        );
-                        Value::Unit
-                    }
-                }
+                self.eval_member(node, object, *member, source, environment, sink, depth)
             }
             AstKind::Index { object, index } => {
-                let object_span = object.span;
-                let object = self.eval(object, source, environment, sink, depth + 1);
-                let index_value = self.eval(index, source, environment, sink, depth + 1);
-                let Value::Integer(i) = index_value else {
-                    sink.emit(
-                        Diagnostic::error(format!(
-                            "`index` must be an integer, found `{}`",
-                            index_value.type_name()
-                        ))
-                        .at(index.span),
-                    );
-                    return Value::Unit;
-                };
-                // Bounds are strict, matching `slice`: negative and
-                // out-of-range indices are runtime errors rather than
-                // silent lookups.
-                match object {
-                    Value::List(elements) => {
-                        if i < 0 || i as usize >= elements.len() {
-                            sink.emit(Diagnostic::error("`index` is out of range").at(node.span));
-                            return Value::Unit;
-                        }
-                        elements[i as usize].clone()
-                    }
-                    Value::Str(text) => {
-                        let characters = text.chars().count();
-                        if i < 0 || i as usize >= characters {
-                            sink.emit(Diagnostic::error("`index` is out of range").at(node.span));
-                            return Value::Unit;
-                        }
-                        Value::Str(
-                            text.chars()
-                                .nth(i as usize)
-                                .expect("the bounds check above passed")
-                                .to_string(),
-                        )
-                    }
-                    other => {
-                        sink.emit(
-                            Diagnostic::error(format!(
-                                "cannot index a value of type `{}`",
-                                other.type_name()
-                            ))
-                            .at(object_span),
-                        );
-                        Value::Unit
-                    }
-                }
+                self.eval_index(node, object, index, source, environment, sink, depth)
             }
             AstKind::Integer => {
                 let text = match source.slice(node.span) {
@@ -492,412 +416,54 @@ impl Evaluator {
                 condition,
                 then_branch,
                 else_branch,
-            } => {
-                let condition_value = self.eval(condition, source, environment, sink, depth + 1);
-                match condition_value {
-                    Value::Boolean(true) => {
-                        self.eval(then_branch, source, environment, sink, depth + 1)
-                    }
-                    Value::Boolean(false) => match else_branch {
-                        Some(branch) => self.eval(branch, source, environment, sink, depth + 1),
-                        None => Value::Unit,
-                    },
-                    other => {
-                        sink.emit(
-                            Diagnostic::error(format!(
-                                "condition of `if` must be a boolean, found `{}`",
-                                other.type_name()
-                            ))
-                            .at(condition.span),
-                        );
-                        Value::Unit
-                    }
-                }
-            }
+            } => self.eval_if(
+                node,
+                condition,
+                then_branch,
+                else_branch,
+                source,
+                environment,
+                sink,
+                depth,
+            ),
             AstKind::Function {
                 name,
                 parameters,
                 body,
                 ..
-            } => {
-                let mut names = Vec::with_capacity(parameters.len());
-                let mut seen = HashSet::new();
-                for parameter_span in parameters {
-                    let Some(parameter) = source.slice(*parameter_span) else {
-                        sink.emit(
-                            Diagnostic::error("function declaration has an invalid parameter span")
-                                .at(node.span),
-                        );
-                        return Value::Unit;
-                    };
-                    if !seen.insert(parameter) {
-                        sink.emit(
-                            Diagnostic::error(format!(
-                                "duplicate function parameter `{parameter}`"
-                            ))
-                            .at(*parameter_span),
-                        );
-                        return Value::Unit;
-                    }
-                    names.push(parameter.to_owned());
-                }
-
-                // Capture-by-value: snapshot the non-global bindings visible
-                // where the function is created. Globals stay dynamic so a
-                // top-level function can still resolve itself recursively.
-                let captured = environment.capture_non_globals();
-                let function = Value::Function(FunctionValue {
-                    parameters: names,
-                    body: (**body).clone(),
-                    captured,
-                    source: std::sync::Arc::new(source.clone()),
-                });
-
-                match name {
-                    Some(name_span) => {
-                        // A named declaration binds the name and evaluates to
-                        // unit; an anonymous literal is itself the value.
-                        let Some(name) = source.slice(*name_span) else {
-                            sink.emit(
-                                Diagnostic::error("function declaration has an invalid name span")
-                                    .at(node.span),
-                            );
-                            return Value::Unit;
-                        };
-                        environment.define(name, function);
-                        Value::Unit
-                    }
-                    None => function,
-                }
-            }
+            } => self.eval_function_declaration(
+                node,
+                *name,
+                parameters,
+                body,
+                source,
+                environment,
+                sink,
+            ),
             AstKind::Call { callee, arguments } => {
-                let callable = self.eval(callee, source, environment, sink, depth + 1);
-                let mut values = Vec::with_capacity(arguments.len());
-                for argument in arguments {
-                    values.push(self.eval(argument, source, environment, sink, depth + 1));
-                }
-
-                match callable {
-                    Value::Builtin(builtin) => self.eval_builtin(builtin, &values, node.span, sink),
-                    Value::Function(function) => {
-                        if function.parameters.len() != values.len() {
-                            sink.emit(
-                                Diagnostic::error(format!(
-                                    "function expected {} argument(s), received {}",
-                                    function.parameters.len(),
-                                    values.len()
-                                ))
-                                .at(node.span),
-                            );
-                            return Value::Unit;
-                        }
-                        let call_depth = self.call_depth.get();
-                        if call_depth >= MAX_CALL_DEPTH {
-                            sink.emit(
-                                Diagnostic::error("function call depth is too deep").at(node.span),
-                            );
-                            return Value::Unit;
-                        }
-
-                        self.call_depth.set(call_depth + 1);
-                        let caller_scopes = environment.begin_call(&function.captured);
-                        for (parameter, value) in function.parameters.iter().zip(values) {
-                            environment.define(parameter, value);
-                        }
-                        // The body is evaluated against the source the function was
-                        // defined in, not the caller's; spans inside the body point
-                        // there.
-                        let value = self.eval(
-                            &function.body,
-                            &function.source,
-                            environment,
-                            sink,
-                            depth + 1,
-                        );
-                        environment.end_call(caller_scopes);
-                        // Consume whatever control-flow signal the body
-                        // executed. A `return` supplies the call's value; a
-                        // `break` or `continue` never had a matching loop in
-                        // the body, which is an error at the call site.
-                        let value = match self.pending_flow.borrow_mut().take() {
-                            Some(Flow::Return(returned)) => returned,
-                            Some(Flow::Break) => {
-                                sink.emit(
-                                    Diagnostic::error("`break` outside of a loop").at(callee.span),
-                                );
-                                Value::Unit
-                            }
-                            Some(Flow::Continue) => {
-                                sink.emit(
-                                    Diagnostic::error("`continue` outside of a loop")
-                                        .at(callee.span),
-                                );
-                                Value::Unit
-                            }
-                            None => value,
-                        };
-                        self.call_depth.set(call_depth);
-                        value
-                    }
-                    other => {
-                        sink.emit(
-                            Diagnostic::error(format!(
-                                "cannot call value of type `{}`",
-                                other.type_name()
-                            ))
-                            .at(callee.span),
-                        );
-                        Value::Unit
-                    }
-                }
+                self.eval_call(node, callee, arguments, source, environment, sink, depth)
             }
             AstKind::While { condition, body } => {
-                let mut iterations = 0u64;
-                loop {
-                    iterations += 1;
-                    if iterations > MAX_LOOP_ITERATIONS {
-                        sink.emit(
-                            Diagnostic::error("loop exceeded the maximum number of iterations")
-                                .at(node.span),
-                        );
-                        break;
-                    }
-                    let condition_value =
-                        self.eval(condition, source, environment, sink, depth + 1);
-                    match condition_value {
-                        Value::Boolean(true) => {
-                            self.eval(body, source, environment, sink, depth + 1);
-                            // A `break` or `continue` from the body is
-                            // consumed by this loop; a pending `return` (or
-                            // exhausted resources) stops iteration without
-                            // being consumed so it propagates outward.
-                            let exit_for_break = self.take_loop_signal();
-                            if self.has_pending_flow()
-                                || self.resource_exhausted.get()
-                                || sink.is_full()
-                                || exit_for_break
-                            {
-                                break;
-                            }
-                        }
-                        Value::Boolean(false) => break,
-                        other => {
-                            sink.emit(
-                                Diagnostic::error(format!(
-                                    "condition of `while` must be a boolean, found `{}`",
-                                    other.type_name()
-                                ))
-                                .at(condition.span),
-                            );
-                            break;
-                        }
-                    }
-                }
-                Value::Unit
+                self.eval_while(node, condition, body, source, environment, sink, depth)
             }
             AstKind::For {
                 variable,
                 start,
                 end,
                 body,
-            } => {
-                let Some(name) = source.slice(*variable) else {
-                    sink.emit(
-                        Diagnostic::error("`for` has an invalid variable span").at(node.span),
-                    );
-                    return Value::Unit;
-                };
-                // The iteration sequence is fixed before the first pass:
-                // range bounds are read once, and a string yields its
-                // scalar values as one-character strings.
-                let items = if let Some(start_expr) = start {
-                    let from_value = self.eval(start_expr, source, environment, sink, depth + 1);
-                    let to_value = self.eval(end, source, environment, sink, depth + 1);
-                    match (from_value, to_value) {
-                        (Value::Integer(from), Value::Integer(to)) => {
-                            // Half-open like `slice`; inverted and empty
-                            // ranges simply iterate zero times. Every
-                            // yielded value is below `to`, so no addition
-                            // can overflow.
-                            let count = ((to as i128 - from as i128).max(0)) as u64;
-                            // One extra item lets the executor distinguish a
-                            // completed loop from one cut off by the cap.
-                            let capped = count.min(MAX_LOOP_ITERATIONS + 1);
-                            Some(
-                                (0..capped)
-                                    .map(|step| Value::Integer(from + step as i64))
-                                    .collect::<Vec<Value>>(),
-                            )
-                        }
-                        (from_value, to_value) => {
-                            sink.emit(
-                                Diagnostic::error(format!(
-                                    "`for` range bounds must be integers, found `{}` and `{}`",
-                                    from_value.type_name(),
-                                    to_value.type_name()
-                                ))
-                                .at(node.span),
-                            );
-                            None
-                        }
-                    }
-                } else {
-                    let iterable = self.eval(end, source, environment, sink, depth + 1);
-                    match iterable {
-                        Value::Str(text) => Some(
-                            text.chars()
-                                .map(|character| Value::Str(character.to_string()))
-                                .take(MAX_LOOP_ITERATIONS as usize + 1)
-                                .collect(),
-                        ),
-                        Value::List(elements) => {
-                            // One extra element lets the executor
-                            // distinguish a completed loop from one cut
-                            // off by the cap; the list is shared, so copy
-                            // rather than truncate.
-                            Some(
-                                elements
-                                    .iter()
-                                    .take(MAX_LOOP_ITERATIONS as usize + 1)
-                                    .cloned()
-                                    .collect(),
-                            )
-                        }
-                        other => {
-                            sink.emit(
-                                Diagnostic::error(format!(
-                                    "`for` cannot iterate over `{}`, expected a string or range",
-                                    other.type_name()
-                                ))
-                                .at(end.span),
-                            );
-                            None
-                        }
-                    }
-                };
-                let Some(items) = items else {
-                    return Value::Unit;
-                };
-                let mut iterations = 0u64;
-                for item in items {
-                    iterations += 1;
-                    if iterations > MAX_LOOP_ITERATIONS {
-                        sink.emit(
-                            Diagnostic::error("loop exceeded the maximum number of iterations")
-                                .at(node.span),
-                        );
-                        break;
-                    }
-                    environment.push_scope();
-                    environment.define(name, item);
-                    self.eval(body, source, environment, sink, depth + 1);
-                    // A `break` or `continue` from the body is consumed by
-                    // this loop; a pending `return` (or exhausted resources)
-                    // stops iteration without being consumed so it
-                    // propagates outward.
-                    let exit_for_break = self.take_loop_signal();
-                    environment.pop_scope();
-                    if self.has_pending_flow()
-                        || self.resource_exhausted.get()
-                        || sink.is_full()
-                        || exit_for_break
-                    {
-                        break;
-                    }
-                }
-                Value::Unit
-            }
+            } => self.eval_for(
+                node,
+                *variable,
+                start,
+                end,
+                body,
+                source,
+                environment,
+                sink,
+                depth,
+            ),
             AstKind::Assignment { target, value } => {
-                let name = match &target.kind {
-                    AstKind::Identifier => match source.slice(target.span) {
-                        Some(name) => name.to_owned(),
-                        None => {
-                            sink.emit(
-                                Diagnostic::error("invalid assignment target span").at(target.span),
-                            );
-                            return Value::Unit;
-                        }
-                    },
-                    _ => {
-                        sink.emit(Diagnostic::error("invalid assignment target").at(target.span));
-                        return Value::Unit;
-                    }
-                };
-                // Fast paths: `name = name + <pure expression>` appends to the
-                // existing string in place (or extends the existing list when
-                // the right operand is a list literal), and `name =
-                // append(name, <pure expression>)` pushes onto the existing
-                // list in place, instead of rebuilding the value from a fresh
-                // copy on every iteration. This keeps accumulation loops such
-                // as `acc = acc + "!"`, `items = append(items, x)`, or
-                // `items = items + [x]` linear in total work.
-                if let AstKind::Binary {
-                    operator: BinaryOperator::Add,
-                    left,
-                    right,
-                } = &value.kind
-                {
-                    if matches!(left.kind, AstKind::Identifier)
-                        && source.slice(left.span) == Some(name.as_str())
-                        && !Self::may_mutate_bindings(right)
-                        && environment.lookup(&name).is_some()
-                    {
-                        if let Some(value) = self.try_append_in_place(
-                            &name,
-                            value.span,
-                            right,
-                            source,
-                            environment,
-                            sink,
-                            depth,
-                        ) {
-                            return value;
-                        }
-                        if let AstKind::List { elements } = &right.kind
-                            && let Some(value) = self.try_list_concat_in_place(
-                                &name,
-                                value.span,
-                                elements,
-                                source,
-                                environment,
-                                sink,
-                                depth,
-                            )
-                        {
-                            return value;
-                        }
-                    }
-                }
-                // List fast path: `name = append(name, <pure expression>)`.
-                if let AstKind::Call { callee, arguments } = &value.kind
-                    && arguments.len() == 2
-                    && matches!(callee.kind, AstKind::Identifier)
-                    && source.slice(callee.span) == Some(BuiltinFunction::Append.name())
-                    && matches!(arguments[0].kind, AstKind::Identifier)
-                    && source.slice(arguments[0].span) == Some(name.as_str())
-                    && !Self::may_mutate_bindings(&arguments[1])
-                    && environment.lookup(&name).is_some()
-                {
-                    if let Some(value) = self.try_list_append_in_place(
-                        &name,
-                        value.span,
-                        &arguments[1],
-                        source,
-                        environment,
-                        sink,
-                        depth,
-                    ) {
-                        return value;
-                    }
-                }
-                let value = self.eval(value, source, environment, sink, depth + 1);
-                if !environment.assign(&name, value.clone()) {
-                    sink.emit(
-                        Diagnostic::error(format!("cannot assign to undefined variable `{name}`"))
-                            .at(target.span),
-                    );
-                }
-                value
+                self.eval_assignment(node, target, value, source, environment, sink, depth)
             }
             AstKind::Return { value } => {
                 // Record the value for the enclosing call boundary to consume;
@@ -925,8 +491,583 @@ impl Evaluator {
         }
     }
 
+    /// Evaluates a member access such as `module.name`.
+    #[allow(clippy::too_many_arguments)]
+    fn eval_member(
+        &self,
+        node: &AstNode,
+        object: &AstNode,
+        member: Span,
+        source: &SourceFile,
+        environment: &mut Environment,
+        sink: &mut DiagnosticSink,
+        depth: usize,
+    ) -> Value {
+        let object = self.eval(object, source, environment, sink, depth + 1);
+        let Some(member) = source.slice(member) else {
+            sink.emit(Diagnostic::error("invalid module member span").at(node.span));
+            return Value::Unit;
+        };
+        match object {
+            Value::Module(module) => match module.get(member) {
+                Some(value) => value.clone(),
+                None => {
+                    sink.emit(
+                        Diagnostic::error(format!("module has no exported member `{member}`"))
+                            .at(node.span),
+                    );
+                    Value::Unit
+                }
+            },
+            other => {
+                sink.emit(
+                    Diagnostic::error(format!(
+                        "cannot access member `{member}` on value of type `{}`",
+                        other.type_name()
+                    ))
+                    .at(node.span),
+                );
+                Value::Unit
+            }
+        }
+    }
+
+    /// Evaluates an index expression such as `list[0]`. Bounds are strict,
+    /// matching `slice`: negative and out-of-range indices are runtime
+    /// errors rather than silent lookups.
+    #[allow(clippy::too_many_arguments)]
+    fn eval_index(
+        &self,
+        node: &AstNode,
+        object: &AstNode,
+        index: &AstNode,
+        source: &SourceFile,
+        environment: &mut Environment,
+        sink: &mut DiagnosticSink,
+        depth: usize,
+    ) -> Value {
+        let object_span = object.span;
+        let object = self.eval(object, source, environment, sink, depth + 1);
+        let index_value = self.eval(index, source, environment, sink, depth + 1);
+        let Value::Integer(i) = index_value else {
+            sink.emit(
+                Diagnostic::error(format!(
+                    "`index` must be an integer, found `{}`",
+                    index_value.type_name()
+                ))
+                .at(index.span),
+            );
+            return Value::Unit;
+        };
+        match object {
+            Value::List(elements) => {
+                if i < 0 || i as usize >= elements.len() {
+                    sink.emit(Diagnostic::error("`index` is out of range").at(node.span));
+                    return Value::Unit;
+                }
+                elements[i as usize].clone()
+            }
+            Value::Str(text) => {
+                let characters = text.chars().count();
+                if i < 0 || i as usize >= characters {
+                    sink.emit(Diagnostic::error("`index` is out of range").at(node.span));
+                    return Value::Unit;
+                }
+                Value::Str(
+                    text.chars()
+                        .nth(i as usize)
+                        .expect("the bounds check above passed")
+                        .to_string(),
+                )
+            }
+            other => {
+                sink.emit(
+                    Diagnostic::error(format!(
+                        "cannot index a value of type `{}`",
+                        other.type_name()
+                    ))
+                    .at(object_span),
+                );
+                Value::Unit
+            }
+        }
+    }
+
+    /// Evaluates an `if`/`else` conditional. The condition must be a
+    /// boolean; a missing `else` branch yields unit.
+    #[allow(clippy::too_many_arguments)]
+    fn eval_if(
+        &self,
+        _node: &AstNode,
+        condition: &AstNode,
+        then_branch: &AstNode,
+        else_branch: &Option<Box<AstNode>>,
+        source: &SourceFile,
+        environment: &mut Environment,
+        sink: &mut DiagnosticSink,
+        depth: usize,
+    ) -> Value {
+        let condition_value = self.eval(condition, source, environment, sink, depth + 1);
+        match condition_value {
+            Value::Boolean(true) => self.eval(then_branch, source, environment, sink, depth + 1),
+            Value::Boolean(false) => match else_branch {
+                Some(branch) => self.eval(branch, source, environment, sink, depth + 1),
+                None => Value::Unit,
+            },
+            other => {
+                sink.emit(
+                    Diagnostic::error(format!(
+                        "condition of `if` must be a boolean, found `{}`",
+                        other.type_name()
+                    ))
+                    .at(condition.span),
+                );
+                Value::Unit
+            }
+        }
+    }
+
+    /// Evaluates a function declaration. A named declaration binds the name
+    /// and evaluates to unit; an anonymous literal is itself the value.
+    /// Capture is by value: the non-global bindings visible where the
+    /// function is created are snapshotted; globals stay dynamic so a
+    /// top-level function can still resolve itself recursively.
+    #[allow(clippy::too_many_arguments)]
+    fn eval_function_declaration(
+        &self,
+        node: &AstNode,
+        name: Option<Span>,
+        parameters: &[Span],
+        body: &AstNode,
+        source: &SourceFile,
+        environment: &mut Environment,
+        sink: &mut DiagnosticSink,
+    ) -> Value {
+        let mut names = Vec::with_capacity(parameters.len());
+        let mut seen = HashSet::new();
+        for parameter_span in parameters {
+            let Some(parameter) = source.slice(*parameter_span) else {
+                sink.emit(
+                    Diagnostic::error("function declaration has an invalid parameter span")
+                        .at(node.span),
+                );
+                return Value::Unit;
+            };
+            if !seen.insert(parameter) {
+                sink.emit(
+                    Diagnostic::error(format!("duplicate function parameter `{parameter}`"))
+                        .at(*parameter_span),
+                );
+                return Value::Unit;
+            }
+            names.push(parameter.to_owned());
+        }
+
+        let captured = environment.capture_non_globals();
+        let function = Value::Function(FunctionValue {
+            parameters: names,
+            body: body.clone(),
+            captured,
+            source: std::sync::Arc::new(source.clone()),
+        });
+
+        match name {
+            Some(name_span) => {
+                let Some(name) = source.slice(name_span) else {
+                    sink.emit(
+                        Diagnostic::error("function declaration has an invalid name span")
+                            .at(node.span),
+                    );
+                    return Value::Unit;
+                };
+                environment.define(name, function);
+                Value::Unit
+            }
+            None => function,
+        }
+    }
+
+    /// Evaluates a `while` loop. The innermost loop consumes a `break` or
+    /// `continue`; a pending `return` (or exhausted resources) stops
+    /// iteration without being consumed so it propagates outward.
+    #[allow(clippy::too_many_arguments)]
+    fn eval_while(
+        &self,
+        node: &AstNode,
+        condition: &AstNode,
+        body: &AstNode,
+        source: &SourceFile,
+        environment: &mut Environment,
+        sink: &mut DiagnosticSink,
+        depth: usize,
+    ) -> Value {
+        let mut iterations = 0u64;
+        loop {
+            iterations += 1;
+            if iterations > MAX_LOOP_ITERATIONS {
+                sink.emit(
+                    Diagnostic::error("loop exceeded the maximum number of iterations")
+                        .at(node.span),
+                );
+                break;
+            }
+            let condition_value = self.eval(condition, source, environment, sink, depth + 1);
+            match condition_value {
+                Value::Boolean(true) => {
+                    self.eval(body, source, environment, sink, depth + 1);
+                    let exit_for_break = self.take_loop_signal();
+                    if self.has_pending_flow()
+                        || self.resource_exhausted.get()
+                        || sink.is_full()
+                        || exit_for_break
+                    {
+                        break;
+                    }
+                }
+                Value::Boolean(false) => break,
+                other => {
+                    sink.emit(
+                        Diagnostic::error(format!(
+                            "condition of `while` must be a boolean, found `{}`",
+                            other.type_name()
+                        ))
+                        .at(condition.span),
+                    );
+                    break;
+                }
+            }
+        }
+        Value::Unit
+    }
+
+    /// Evaluates a `for` loop over a range, string, or list. The iteration
+    /// sequence is fixed before the first pass: range bounds are read once,
+    /// and a string yields its scalar values as one-character strings.
+    #[allow(clippy::too_many_arguments)]
+    fn eval_for(
+        &self,
+        node: &AstNode,
+        variable: Span,
+        start: &Option<Box<AstNode>>,
+        end: &AstNode,
+        body: &AstNode,
+        source: &SourceFile,
+        environment: &mut Environment,
+        sink: &mut DiagnosticSink,
+        depth: usize,
+    ) -> Value {
+        let Some(name) = source.slice(variable) else {
+            sink.emit(Diagnostic::error("`for` has an invalid variable span").at(node.span));
+            return Value::Unit;
+        };
+        let items = if let Some(start_expr) = start {
+            let from_value = self.eval(start_expr, source, environment, sink, depth + 1);
+            let to_value = self.eval(end, source, environment, sink, depth + 1);
+            match (from_value, to_value) {
+                (Value::Integer(from), Value::Integer(to)) => {
+                    // Half-open like `slice`; inverted and empty ranges
+                    // simply iterate zero times. Every yielded value is
+                    // below `to`, so no addition can overflow.
+                    let count = ((to as i128 - from as i128).max(0)) as u64;
+                    // One extra item lets the executor distinguish a
+                    // completed loop from one cut off by the cap.
+                    let capped = count.min(MAX_LOOP_ITERATIONS + 1);
+                    Some(
+                        (0..capped)
+                            .map(|step| Value::Integer(from + step as i64))
+                            .collect::<Vec<Value>>(),
+                    )
+                }
+                (from_value, to_value) => {
+                    sink.emit(
+                        Diagnostic::error(format!(
+                            "`for` range bounds must be integers, found `{}` and `{}`",
+                            from_value.type_name(),
+                            to_value.type_name()
+                        ))
+                        .at(node.span),
+                    );
+                    None
+                }
+            }
+        } else {
+            let iterable = self.eval(end, source, environment, sink, depth + 1);
+            match iterable {
+                Value::Str(text) => Some(
+                    text.chars()
+                        .map(|character| Value::Str(character.to_string()))
+                        .take(MAX_LOOP_ITERATIONS as usize + 1)
+                        .collect(),
+                ),
+                Value::List(elements) => {
+                    // One extra element lets the executor distinguish a
+                    // completed loop from one cut off by the cap; the list
+                    // is shared, so copy rather than truncate.
+                    Some(
+                        elements
+                            .iter()
+                            .take(MAX_LOOP_ITERATIONS as usize + 1)
+                            .cloned()
+                            .collect(),
+                    )
+                }
+                other => {
+                    sink.emit(
+                        Diagnostic::error(format!(
+                            "`for` cannot iterate over `{}`, expected a string or range",
+                            other.type_name()
+                        ))
+                        .at(end.span),
+                    );
+                    None
+                }
+            }
+        };
+        let Some(items) = items else {
+            return Value::Unit;
+        };
+        let mut iterations = 0u64;
+        for item in items {
+            iterations += 1;
+            if iterations > MAX_LOOP_ITERATIONS {
+                sink.emit(
+                    Diagnostic::error("loop exceeded the maximum number of iterations")
+                        .at(node.span),
+                );
+                break;
+            }
+            environment.push_scope();
+            environment.define(name, item);
+            self.eval(body, source, environment, sink, depth + 1);
+            let exit_for_break = self.take_loop_signal();
+            environment.pop_scope();
+            if self.has_pending_flow()
+                || self.resource_exhausted.get()
+                || sink.is_full()
+                || exit_for_break
+            {
+                break;
+            }
+        }
+        Value::Unit
+    }
+
+    /// Evaluates a call. Builtins dispatch through [`Evaluator::eval_builtin`];
+    /// user functions bind parameters in a fresh scope layered over the
+    /// captured bindings and evaluate their body against the source they
+    /// were defined in. Whatever control-flow signal the body executed is
+    /// consumed here: a `return` supplies the call's value; a `break` or
+    /// `continue` never had a matching loop in the body and is an error at
+    /// the call site.
+    #[allow(clippy::too_many_arguments)]
+    fn eval_call(
+        &self,
+        node: &AstNode,
+        callee: &AstNode,
+        arguments: &[AstNode],
+        source: &SourceFile,
+        environment: &mut Environment,
+        sink: &mut DiagnosticSink,
+        depth: usize,
+    ) -> Value {
+        let callable = self.eval(callee, source, environment, sink, depth + 1);
+        let mut values = Vec::with_capacity(arguments.len());
+        for argument in arguments {
+            values.push(self.eval(argument, source, environment, sink, depth + 1));
+        }
+
+        match callable {
+            Value::Builtin(builtin) => self.eval_builtin(builtin, &values, node.span, sink),
+            Value::Function(function) => {
+                if function.parameters.len() != values.len() {
+                    sink.emit(
+                        Diagnostic::error(format!(
+                            "function expected {} argument(s), received {}",
+                            function.parameters.len(),
+                            values.len()
+                        ))
+                        .at(node.span),
+                    );
+                    return Value::Unit;
+                }
+                let call_depth = self.call_depth.get();
+                if call_depth >= MAX_CALL_DEPTH {
+                    sink.emit(Diagnostic::error("function call depth is too deep").at(node.span));
+                    return Value::Unit;
+                }
+
+                self.call_depth.set(call_depth + 1);
+                let caller_scopes = environment.begin_call(&function.captured);
+                for (parameter, value) in function.parameters.iter().zip(values) {
+                    environment.define(parameter, value);
+                }
+                let value = self.eval(
+                    &function.body,
+                    &function.source,
+                    environment,
+                    sink,
+                    depth + 1,
+                );
+                environment.end_call(caller_scopes);
+                let value = match self.pending_flow.borrow_mut().take() {
+                    Some(Flow::Return(returned)) => returned,
+                    Some(Flow::Break) => {
+                        sink.emit(Diagnostic::error("`break` outside of a loop").at(callee.span));
+                        Value::Unit
+                    }
+                    Some(Flow::Continue) => {
+                        sink.emit(
+                            Diagnostic::error("`continue` outside of a loop").at(callee.span),
+                        );
+                        Value::Unit
+                    }
+                    None => value,
+                };
+                self.call_depth.set(call_depth);
+                value
+            }
+            other => {
+                sink.emit(
+                    Diagnostic::error(format!("cannot call value of type `{}`", other.type_name()))
+                        .at(callee.span),
+                );
+                Value::Unit
+            }
+        }
+    }
+
+    /// Evaluates an assignment to a plain identifier.
+    ///
+    /// Accumulation idioms take in-place fast paths instead of rebuilding
+    /// the value from a fresh copy on every iteration:
+    /// `name = name + <pure expression>` appends to the existing string (or
+    /// extends the existing list when the right operand is a list literal),
+    /// and `name = append(name, <pure expression>)` pushes onto the
+    /// existing list. This keeps accumulation loops such as
+    /// `acc = acc + "!"`, `items = append(items, x)`, or
+    /// `items = items + [x]` linear in total work.
+    #[allow(clippy::too_many_arguments)]
+    fn eval_assignment(
+        &self,
+        _node: &AstNode,
+        target: &AstNode,
+        value: &AstNode,
+        source: &SourceFile,
+        environment: &mut Environment,
+        sink: &mut DiagnosticSink,
+        depth: usize,
+    ) -> Value {
+        let name = match &target.kind {
+            AstKind::Identifier => match source.slice(target.span) {
+                Some(name) => name.to_owned(),
+                None => {
+                    sink.emit(Diagnostic::error("invalid assignment target span").at(target.span));
+                    return Value::Unit;
+                }
+            },
+            _ => {
+                sink.emit(Diagnostic::error("invalid assignment target").at(target.span));
+                return Value::Unit;
+            }
+        };
+        if let AstKind::Binary {
+            operator: BinaryOperator::Add,
+            left,
+            right,
+        } = &value.kind
+        {
+            if matches!(left.kind, AstKind::Identifier)
+                && source.slice(left.span) == Some(name.as_str())
+                && !Self::may_mutate_bindings(right)
+                && environment.lookup(&name).is_some()
+            {
+                if let Some(value) = self.try_append_in_place(
+                    &name,
+                    value.span,
+                    right,
+                    source,
+                    environment,
+                    sink,
+                    depth,
+                ) {
+                    return value;
+                }
+                if let AstKind::List { elements } = &right.kind
+                    && let Some(value) = self.try_list_concat_in_place(
+                        &name,
+                        value.span,
+                        elements,
+                        source,
+                        environment,
+                        sink,
+                        depth,
+                    )
+                {
+                    return value;
+                }
+            }
+        }
+        // List fast path: `name = append(name, <pure expression>)`.
+        if let AstKind::Call { callee, arguments } = &value.kind
+            && arguments.len() == 2
+            && matches!(callee.kind, AstKind::Identifier)
+            && source.slice(callee.span) == Some(BuiltinFunction::Append.name())
+            && matches!(arguments[0].kind, AstKind::Identifier)
+            && source.slice(arguments[0].span) == Some(name.as_str())
+            && !Self::may_mutate_bindings(&arguments[1])
+            && environment.lookup(&name).is_some()
+        {
+            if let Some(value) = self.try_list_append_in_place(
+                &name,
+                value.span,
+                &arguments[1],
+                source,
+                environment,
+                sink,
+                depth,
+            ) {
+                return value;
+            }
+        }
+        let value = self.eval(value, source, environment, sink, depth + 1);
+        if !environment.assign(&name, value.clone()) {
+            sink.emit(
+                Diagnostic::error(format!("cannot assign to undefined variable `{name}`"))
+                    .at(target.span),
+            );
+        }
+        value
+    }
+
     /// Evaluates a callable from the built-in prelude.
     fn eval_builtin(
+        &self,
+        builtin: BuiltinFunction,
+        values: &[Value],
+        span: Span,
+        sink: &mut DiagnosticSink,
+    ) -> Value {
+        // Deliberately exhaustive over `BuiltinFunction` - no `_` arm - so
+        // adding a variant forces routing it to a category.
+        match builtin {
+            BuiltinFunction::Len
+            | BuiltinFunction::Str
+            | BuiltinFunction::Type
+            | BuiltinFunction::Int => self.eval_conversion_builtin(builtin, values, span, sink),
+            BuiltinFunction::Upper
+            | BuiltinFunction::Lower
+            | BuiltinFunction::Trim
+            | BuiltinFunction::Replace => self.eval_string_builtin(builtin, values, span, sink),
+            BuiltinFunction::Contains
+            | BuiltinFunction::Find
+            | BuiltinFunction::Slice
+            | BuiltinFunction::Append => self.eval_collection_builtin(builtin, values, span, sink),
+        }
+    }
+
+    /// Evaluates the value conversion and inspection built-ins: `len`,
+    /// `str`, `type`, and `int`.
+    fn eval_conversion_builtin(
         &self,
         builtin: BuiltinFunction,
         values: &[Value],
@@ -969,69 +1110,6 @@ impl Evaluator {
                 }
                 Value::Str(values[0].type_name().to_owned())
             }
-            BuiltinFunction::Upper | BuiltinFunction::Lower => {
-                let name = builtin.name();
-                if !Self::check_arity(name, values, 1, span, sink) {
-                    return Value::Unit;
-                }
-                match &values[0] {
-                    Value::Str(value) => {
-                        let mapped = match builtin {
-                            BuiltinFunction::Upper => value.to_uppercase(),
-                            _ => value.to_lowercase(),
-                        };
-                        if !self.check_string_size(mapped.len(), span, sink)
-                            || !self.charge_allocation(mapped.len(), span, sink)
-                        {
-                            return Value::Unit;
-                        }
-                        Value::Str(mapped)
-                    }
-                    other => {
-                        sink.emit(
-                            Diagnostic::error(format!(
-                                "`{name}` expects a string argument, found `{}`",
-                                other.type_name()
-                            ))
-                            .at(span),
-                        );
-                        Value::Unit
-                    }
-                }
-            }
-            BuiltinFunction::Contains => {
-                if !Self::check_arity(BuiltinFunction::Contains.name(), values, 2, span, sink) {
-                    return Value::Unit;
-                }
-                let (haystack, needle) = (&values[0], &values[1]);
-                if let Value::Str(haystack) = haystack {
-                    if let Value::Str(needle) = needle {
-                        return Value::Boolean(haystack.contains(needle.as_str()));
-                    }
-                    sink.emit(
-                        Diagnostic::error(format!(
-                            "`contains` expects a string needle, found `{}`",
-                            needle.type_name()
-                        ))
-                        .at(span),
-                    );
-                    return Value::Unit;
-                }
-                if let Value::List(elements) = haystack {
-                    // List membership uses the same equality as `==`:
-                    // elements match by value, recursing through nested
-                    // lists.
-                    return Value::Boolean(elements.iter().any(|element| element == needle));
-                }
-                sink.emit(
-                    Diagnostic::error(format!(
-                        "`contains` expects a string or list haystack, found `{}`",
-                        haystack.type_name()
-                    ))
-                    .at(span),
-                );
-                Value::Unit
-            }
             BuiltinFunction::Int => {
                 if !Self::check_arity(BuiltinFunction::Int.name(), values, 1, span, sink) {
                     return Value::Unit;
@@ -1071,45 +1149,76 @@ impl Evaluator {
                     }
                 }
             }
-            BuiltinFunction::Find => {
-                if !Self::check_arity(BuiltinFunction::Find.name(), values, 2, span, sink) {
+            // `eval_builtin` routes every built-in to exactly one category,
+            // so no other variant can reach this match.
+            _ => unreachable!("built-in routed to the wrong category"),
+        }
+    }
+
+    /// Evaluates the string transformation built-ins: `upper`, `lower`,
+    /// `trim`, and `replace`. Each copies its input; every copy is charged
+    /// against the evaluation's cumulative allocation budget.
+    fn eval_string_builtin(
+        &self,
+        builtin: BuiltinFunction,
+        values: &[Value],
+        span: Span,
+        sink: &mut DiagnosticSink,
+    ) -> Value {
+        match builtin {
+            BuiltinFunction::Upper | BuiltinFunction::Lower => {
+                let name = builtin.name();
+                if !Self::check_arity(name, values, 1, span, sink) {
                     return Value::Unit;
                 }
-                let (haystack, needle) = (&values[0], &values[1]);
-                if let Value::Str(haystack) = haystack {
-                    if let Value::Str(needle) = needle {
-                        // `str::find` reports byte offsets; convert to the
-                        // scalar-value indices every other built-in uses.
-                        return Value::Integer(match haystack.find(needle.as_str()) {
-                            Some(byte) => haystack[..byte].chars().count() as i64,
-                            None => -1,
-                        });
+                match &values[0] {
+                    Value::Str(value) => {
+                        let mapped = match builtin {
+                            BuiltinFunction::Upper => value.to_uppercase(),
+                            _ => value.to_lowercase(),
+                        };
+                        if !self.check_string_size(mapped.len(), span, sink)
+                            || !self.charge_allocation(mapped.len(), span, sink)
+                        {
+                            return Value::Unit;
+                        }
+                        Value::Str(mapped)
                     }
-                    sink.emit(
-                        Diagnostic::error(format!(
-                            "`find` expects a string needle, found `{}`",
-                            needle.type_name()
-                        ))
-                        .at(span),
-                    );
+                    other => {
+                        sink.emit(
+                            Diagnostic::error(format!(
+                                "`{name}` expects a string argument, found `{}`",
+                                other.type_name()
+                            ))
+                            .at(span),
+                        );
+                        Value::Unit
+                    }
+                }
+            }
+            BuiltinFunction::Trim => {
+                if !Self::check_arity(BuiltinFunction::Trim.name(), values, 1, span, sink) {
                     return Value::Unit;
                 }
-                if let Value::List(elements) = haystack {
-                    // List search uses the same equality as `==`, so
-                    // nested lists match element by element.
-                    return Value::Integer(match elements.iter().position(|e| e == needle) {
-                        Some(index) => index as i64,
-                        None => -1,
-                    });
+                match &values[0] {
+                    Value::Str(value) => {
+                        let trimmed = value.trim().to_owned();
+                        if !self.charge_allocation(trimmed.len(), span, sink) {
+                            return Value::Unit;
+                        }
+                        Value::Str(trimmed)
+                    }
+                    other => {
+                        sink.emit(
+                            Diagnostic::error(format!(
+                                "`trim` expects a string argument, found `{}`",
+                                other.type_name()
+                            ))
+                            .at(span),
+                        );
+                        Value::Unit
+                    }
                 }
-                sink.emit(
-                    Diagnostic::error(format!(
-                        "`find` expects a string or list haystack, found `{}`",
-                        haystack.type_name()
-                    ))
-                    .at(span),
-                );
-                Value::Unit
             }
             BuiltinFunction::Replace => {
                 if !Self::check_arity(BuiltinFunction::Replace.name(), values, 3, span, sink) {
@@ -1159,29 +1268,94 @@ impl Evaluator {
                 );
                 Value::Unit
             }
-            BuiltinFunction::Trim => {
-                if !Self::check_arity(BuiltinFunction::Trim.name(), values, 1, span, sink) {
+            // `eval_builtin` routes every built-in to exactly one category,
+            // so no other variant can reach this match.
+            _ => unreachable!("built-in routed to the wrong category"),
+        }
+    }
+
+    /// Evaluates the collection built-ins: `contains`, `find`, and `slice`
+    /// accept strings or lists; `append` is list-only.
+    fn eval_collection_builtin(
+        &self,
+        builtin: BuiltinFunction,
+        values: &[Value],
+        span: Span,
+        sink: &mut DiagnosticSink,
+    ) -> Value {
+        match builtin {
+            BuiltinFunction::Contains => {
+                if !Self::check_arity(BuiltinFunction::Contains.name(), values, 2, span, sink) {
                     return Value::Unit;
                 }
-                match &values[0] {
-                    Value::Str(value) => {
-                        let trimmed = value.trim().to_owned();
-                        if !self.charge_allocation(trimmed.len(), span, sink) {
-                            return Value::Unit;
-                        }
-                        Value::Str(trimmed)
+                let (haystack, needle) = (&values[0], &values[1]);
+                if let Value::Str(haystack) = haystack {
+                    if let Value::Str(needle) = needle {
+                        return Value::Boolean(haystack.contains(needle.as_str()));
                     }
-                    other => {
-                        sink.emit(
-                            Diagnostic::error(format!(
-                                "`trim` expects a string argument, found `{}`",
-                                other.type_name()
-                            ))
-                            .at(span),
-                        );
-                        Value::Unit
-                    }
+                    sink.emit(
+                        Diagnostic::error(format!(
+                            "`contains` expects a string needle, found `{}`",
+                            needle.type_name()
+                        ))
+                        .at(span),
+                    );
+                    return Value::Unit;
                 }
+                if let Value::List(elements) = haystack {
+                    // List membership uses the same equality as `==`:
+                    // elements match by value, recursing through nested
+                    // lists.
+                    return Value::Boolean(elements.iter().any(|element| element == needle));
+                }
+                sink.emit(
+                    Diagnostic::error(format!(
+                        "`contains` expects a string or list haystack, found `{}`",
+                        haystack.type_name()
+                    ))
+                    .at(span),
+                );
+                Value::Unit
+            }
+            BuiltinFunction::Find => {
+                if !Self::check_arity(BuiltinFunction::Find.name(), values, 2, span, sink) {
+                    return Value::Unit;
+                }
+                let (haystack, needle) = (&values[0], &values[1]);
+                if let Value::Str(haystack) = haystack {
+                    if let Value::Str(needle) = needle {
+                        // `str::find` reports byte offsets; convert to the
+                        // scalar-value indices every other built-in uses.
+                        return Value::Integer(match haystack.find(needle.as_str()) {
+                            Some(byte) => haystack[..byte].chars().count() as i64,
+                            None => -1,
+                        });
+                    }
+                    sink.emit(
+                        Diagnostic::error(format!(
+                            "`find` expects a string needle, found `{}`",
+                            needle.type_name()
+                        ))
+                        .at(span),
+                    );
+                    return Value::Unit;
+                }
+                if let Value::List(elements) = haystack {
+                    // List search uses the same equality as `==`, so
+                    // nested lists match element by element.
+                    return Value::Integer(match elements.iter().position(|e| e == needle) {
+                        Some(index) => index as i64,
+                        None => -1,
+                    });
+                }
+                sink.emit(
+                    Diagnostic::error(format!(
+                        "`find` expects a string or list haystack, found `{}`",
+                        haystack.type_name()
+                    ))
+                    .at(span),
+                );
+                Value::Unit
             }
             BuiltinFunction::Slice => {
                 if !Self::check_arity(BuiltinFunction::Slice.name(), values, 3, span, sink) {
@@ -1286,6 +1460,9 @@ impl Evaluator {
                     }
                 }
             }
+            // `eval_builtin` routes every built-in to exactly one category,
+            // so no other variant can reach this match.
+            _ => unreachable!("built-in routed to the wrong category"),
         }
     }
 

@@ -2,6 +2,20 @@
 
 All notable changes to UCL are documented here.
 
+## 1.16.1 - 2026-08-24
+
+### Internal
+
+- Decomposed the evaluator's monolithic statement dispatcher (~710 lines,
+  one `match` arm per construct) into per-construct methods (`eval_while`,
+  `eval_for`, `eval_assignment`, `eval_call`, `eval_function_declaration`,
+  `eval_if`, `eval_index`, `eval_member`) and grouped the built-in
+  dispatcher into conversion, string-transformation, and collection
+  helpers with an exhaustive category router. No behavior change:
+  diagnostics, semantics, resource limits, and performance are identical;
+  the full suite, formatter property tests, and diagnostic spot-checks
+  verify it.
+
 ## 1.16.0 - 2026-08-24
 
 ### Fixed

@@ -113,3 +113,6 @@ Refactor work tracked for future releases; none changes language behavior:
       included — with in-place fast paths keeping accumulation idioms
       linear, and preserve fuzz artifacts when a nightly run fails
       (UCL 1.16)
+- [x] Decompose the evaluator's monolithic statement dispatcher
+      (~710 lines) into per-construct methods and group the built-in
+      dispatcher by category, with no behavior change (UCL 1.16.1)
