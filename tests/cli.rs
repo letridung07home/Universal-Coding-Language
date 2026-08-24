@@ -806,3 +806,98 @@ fn repl_use_resolves_modules_against_the_working_directory() {
     assert!(stdout.contains("99"), "stdout: {stdout}");
     let _ = fs::remove_dir_all(&dir);
 }
+
+// ---------------------------------------------------------------------------
+// ucl fmt: the source formatter subcommand
+// ---------------------------------------------------------------------------
+
+/// Writes `source` to a temporary file and runs `ucl fmt` with `args`
+/// (the path is appended). Returns stdout, stderr, exit code, and the
+/// file's contents afterward.
+fn run_fmt(source: &str, args: &[&str]) -> (String, String, i32, String) {
+    let path = temp_path();
+    fs::write(&path, source).expect("write source file");
+    let mut argv = vec!["fmt"];
+    argv.extend_from_slice(args);
+    let path_string = path.to_string_lossy().into_owned();
+    argv.push(&path_string);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_ucl"))
+        .args(&argv)
+        .output()
+        .expect("run the ucl binary");
+    let contents = fs::read_to_string(&path).unwrap_or_default();
+    let _ = fs::remove_file(&path);
+
+    (
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+        output.status.code().expect("the process exited normally"),
+        contents,
+    )
+}
+
+#[test]
+fn fmt_rewrites_a_file_in_place() {
+    let (_, _, code, contents) = run_fmt("let   x=1;\nif x>1 { y=2;};", &[]);
+    assert_eq!(code, 0);
+    assert_eq!(contents, "let x = 1;\nif x > 1 {\n    y = 2;\n};\n");
+}
+
+#[test]
+fn fmt_leaves_formatted_files_untouched() {
+    let formatted = "let x = 1;\n";
+    let (_, _, code, contents) = run_fmt(formatted, &[]);
+    assert_eq!(code, 0);
+    assert_eq!(contents, formatted);
+}
+
+#[test]
+fn fmt_check_reports_unformatted_files_without_touching_them() {
+    let messy = "let   x=1;";
+    let (stdout, _, code, contents) = run_fmt(messy, &["--check"]);
+    assert_eq!(code, 1);
+    assert!(stdout.contains("not formatted"), "stdout: {stdout}");
+    assert_eq!(contents, messy, "--check must not rewrite the file");
+}
+
+#[test]
+fn fmt_check_exits_zero_for_formatted_files() {
+    let (_, _, code, _) = run_fmt("let x = 1;\n", &["--check"]);
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn fmt_pipes_stdin_to_stdout() {
+    let (stdout, _, code) = run_stdin("fn f( a){\n return a;};\nf(1);", &["fmt", "-"]);
+    assert_eq!(code, 0);
+    assert_eq!(stdout, "fn f(a) {\n    return a;\n};\nf(1);\n");
+}
+
+#[test]
+fn fmt_preserves_comments_end_to_end() {
+    let source = "// header\nlet a = 1; // trailing\n/* block\n   comment */\nlet b = 2;";
+    let (_, _, _, contents) = run_fmt(source, &[]);
+    assert!(contents.contains("// header"), "{contents}");
+    assert!(contents.contains("let a = 1; // trailing"), "{contents}");
+    assert!(contents.contains("/* block\n   comment */"), "{contents}");
+}
+
+#[test]
+fn fmt_never_touches_sources_with_errors() {
+    let broken = "let = ;";
+    let (_, _, code, contents) = run_fmt(broken, &[]);
+    assert_eq!(code, 1);
+    assert_eq!(contents, broken, "a broken file must stay untouched");
+}
+
+#[test]
+fn fmt_usage_errors_exit_two() {
+    // No input at all.
+    let (_, stderr, code) = run_args(&["fmt"]);
+    assert_eq!(code, 2);
+    assert!(stderr.contains("expects a file"), "{stderr}");
+    // Unknown flag.
+    let (_, _, code, _) = run_fmt("1;", &["--wat"]);
+    assert_eq!(code, 2);
+}

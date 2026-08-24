@@ -115,6 +115,28 @@ but it is informational rather than a formal compatibility surface:
 - Each entry evaluates against a persistent environment; errors do not
   end the session.
 
+## Source formatter
+
+The `ucl fmt` subcommand, introduced in 1.14, is stable across releases:
+
+- Layout rules are deterministic: four-space indentation, one statement per
+  line with a terminating semicolon (including after braced statements),
+  single spaces around binary operators, and blocks expanded across lines.
+- Comments are preserved. A comment sharing a source line with preceding
+  code stays trailing on that output line; other comments become standalone
+  lines at the enclosing indentation. Comment text is never altered.
+- Formatting is idempotent: formatting formatted output reproduces it byte
+  for byte.
+- Formatting preserves evaluation: a program that lexes, parses, and
+  evaluates cleanly evaluates to the same value after formatting.
+- Output always ends with exactly one newline; CRLF input is normalized to
+  LF.
+- Exit codes follow the CLI convention: `0` when the output is formatted,
+  `1` when `--check` finds unformatted input or the source has errors, `2`
+  for usage and I/O problems. Files with errors are never rewritten.
+- Future formatter releases may refine layout details only in ways that
+  keep these properties; any exception would be a declared breaking change.
+
 ## Module loading
 
 - Module paths resolve relative to the importing file; this resolution rule

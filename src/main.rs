@@ -10,6 +10,7 @@ use std::fs;
 use std::io::Read;
 use std::process::ExitCode;
 
+use ucl::fmt::format_source;
 use ucl::{DiagnosticSink, Environment, Evaluator, Lexer, Parser, SourceFile};
 
 mod render;
@@ -18,7 +19,8 @@ mod repl;
 use render::{format_value, render_diagnostics};
 
 /// Usage text printed on argument errors and `--help`.
-const USAGE: &str = "usage: ucl [-p <dir>]... [-e <code> | <file>]";
+const USAGE: &str =
+    "usage: ucl [-p <dir>]... [-e <code> | <file>]\n       ucl fmt [--check] [<file> | -]";
 
 /// The environment variable holding module search directories, separated by
 /// the platform's path separator (`:` on Unix, `;` on Windows).
@@ -26,6 +28,11 @@ const SEARCH_PATH_ENV: &str = "UCL_PATH";
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
+
+    // The formatter is a subcommand: `ucl fmt ...`.
+    if args.get(1).map(String::as_str) == Some("fmt") {
+        return run_fmt(&args[2..]);
+    }
 
     let (input, mut search_paths) = match parse_args(&args) {
         Ok(Some(parsed)) => parsed,
@@ -62,6 +69,108 @@ enum Input {
     Stdin,
     /// Inline program text from `-e/--eval`.
     Eval(String),
+}
+
+/// The formatter subcommand's parsed arguments.
+struct FmtArgs {
+    check: bool,
+    input: Option<Input>,
+}
+
+/// Runs `ucl fmt`: format a file in place, pipe stdin to stdout, or check
+/// formatting without rewriting.
+///
+/// Exit codes: 0 when the output is formatted (or rewritten), 1 when
+/// `--check` finds unformatted input or the source has errors, and 2 for
+/// usage and I/O problems. Files with errors are never touched.
+fn run_fmt(args: &[String]) -> ExitCode {
+    let Some(parsed) = parse_fmt_args(args) else {
+        return ExitCode::from(2);
+    };
+    let Some(input) = parsed.input else {
+        eprintln!("error: `ucl fmt` expects a file or `-` for standard input");
+        eprintln!("{USAGE}");
+        return ExitCode::from(2);
+    };
+
+    let (name, contents) = match read_input(&input) {
+        Ok(parts) => parts,
+        Err(message) => {
+            eprintln!("error: {message}");
+            return ExitCode::from(2);
+        }
+    };
+
+    match format_source(&name, &contents) {
+        Ok(formatted) => {
+            if formatted == contents {
+                return ExitCode::SUCCESS;
+            }
+            if parsed.check {
+                println!("{name}: not formatted");
+                return ExitCode::from(1);
+            }
+            match input {
+                Input::Stdin => print!("{formatted}"),
+                Input::File(ref file) => {
+                    if let Err(error) = fs::write(file, &formatted) {
+                        eprintln!("error: cannot write `{file}`: {error}");
+                        return ExitCode::from(2);
+                    }
+                }
+                Input::Eval(_) => {
+                    unreachable!("`ucl fmt` never accepts inline programs");
+                }
+            }
+            ExitCode::SUCCESS
+        }
+        Err(sink) => {
+            let source = SourceFile::new(&name, contents);
+            render_diagnostics(&sink, &source);
+            ExitCode::from(1)
+        }
+    }
+}
+
+/// Interprets `ucl fmt` arguments: an optional `--check` flag plus one
+/// optional source (a file path or `-`).
+fn parse_fmt_args(args: &[String]) -> Option<FmtArgs> {
+    let mut parsed = FmtArgs {
+        check: false,
+        input: None,
+    };
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--check" => {
+                if parsed.check {
+                    eprintln!("error: repeated `--check` flag");
+                    return None;
+                }
+                parsed.check = true;
+            }
+            "-" => {
+                if parsed.input.is_some() {
+                    eprintln!("error: expected a single source file");
+                    return None;
+                }
+                parsed.input = Some(Input::Stdin);
+            }
+            arg if !arg.starts_with('-') => {
+                if parsed.input.is_some() {
+                    eprintln!("error: expected a single source file");
+                    return None;
+                }
+                parsed.input = Some(Input::File(arg.to_owned()));
+            }
+            other => {
+                eprintln!("error: unknown option `{other}`");
+                return None;
+            }
+        }
+        index += 1;
+    }
+    Some(parsed)
 }
 
 /// Reads the program text for `input`, returning its display name and
@@ -149,6 +258,11 @@ fn parse_args(args: &[String]) -> Result<Option<(Input, Vec<String>)>, String> {
                 println!("  -p, --path <dir>  add a module search directory (repeatable)");
                 println!("  -h, --help        show this help");
                 println!("  -V, --version     show the version");
+                println!();
+                println!("Formatter:");
+                println!("  ucl fmt [--check] [<file> | -]");
+                println!("      format a file in place, or pipe stdin to stdout;");
+                println!("      `--check` exits 1 when the input is not formatted");
                 println!();
                 println!(
                     "A file name of `-` reads the program from standard input; \

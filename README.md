@@ -7,7 +7,7 @@ provides an interpreter with a lexer, parser, evaluator, file-based modules,
 an interactive REPL, a command-line interface, and source-aware diagnostics.
 
 > [!NOTE]
-> UCL 1.13 follows the first stable release: the language, CLI, library API, and
+> UCL 1.14 follows the first stable release: the language, CLI, library API, and
 > error categories are covered by [compatibility guarantees](docs/guarantees.md).
 > It remains a deliberately small language — not a batteries-included
 > general-purpose scripting environment.
@@ -35,6 +35,8 @@ an interactive REPL, a command-line interface, and source-aware diagnostics.
 - Line comments (`//`) and nesting block comments (`/* */`)
 - String comparisons (`<`, `<=`, `>`, `>=`)
 - Error diagnostics with source excerpts
+- A deterministic source formatter (`ucl fmt`) that preserves comments and is
+  idempotent
 - A library API and the `ucl` command-line program
 
 The language is defined in the [language specification](docs/spec.md).
@@ -59,6 +61,14 @@ Evaluate it:
 ```console
 $ cargo run -- example.ucl
 UCL: true
+```
+
+Format a file in place (or pipe through stdin) with the formatter:
+
+```console
+$ ucl fmt example.ucl
+$ cat messy.ucl | ucl fmt -
+$ ucl fmt --check src.ucl   # exits 1 when src.ucl needs formatting
 ```
 
 Use `cargo run -- --help` to display command-line help, or start an
@@ -151,12 +161,14 @@ architecture, and contribution instructions.
 │   ├── lexer.rs         # Source text to tokens
 │   ├── parser.rs        # Tokens to AST
 │   ├── evaluator.rs     # AST evaluation
+│   ├── fmt.rs           # Source formatter
 │   ├── module.rs        # `use` statement loading and import machinery
 │   ├── render.rs        # Diagnostic rendering with source excerpts
 │   └── repl.rs          # Interactive session loop
 ├── tests/
 │   ├── cli.rs           # End-to-end CLI and REPL tests
 │   ├── property.rs      # Property-based tests
+│   ├── formatting.rs    # Formatter idempotency and semantics tests
 │   └── smoke.rs         # Public API smoke tests
 └── .github/workflows/   # CI, release, and fuzz workflows
 ```
@@ -181,8 +193,10 @@ equality, and `for` iteration, UCL 1.12 completes the list toolkit
 with functional `append`, list concatenation through `+`, and list support
 in the `slice` and `find` built-ins, and UCL 1.13 is an internal-quality
 release that makes AST classification compiler-enforced and stores lists
-behind shared references. Future directions
-are sketched in the [project roadmap](docs/roadmap.md).
+behind shared references, and UCL 1.14 completes the roadmap with a
+deterministic source formatter: `ucl fmt` rewrites files in place, pipes
+stdin to stdout, supports CI checks with `--check`, and preserves comments.
+Future directions are sketched in the [project roadmap](docs/roadmap.md).
 
 ## Contributing
 

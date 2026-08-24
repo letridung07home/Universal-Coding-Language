@@ -60,8 +60,8 @@ than scheduled:
 - [x] A richer module story beyond local files: extensionless imports and
       configurable search directories (`-p/--path`, `UCL_PATH`)
 
-Every item on this roadmap is now complete. Future work starts from a blank
-page; the language, CLI, library API, and error categories remain covered by
+Every item on this roadmap is complete as of UCL 1.14. Future work starts
+from a blank page; the language, CLI, library API, and error categories remain covered by
 the compatibility guarantees.
 
 ## Beyond 1.7
@@ -74,7 +74,9 @@ Sketched rather than scheduled:
 - [x] Aggregate values such as lists (UCL 1.11 adds immutable lists with
       indexing, equality, and iteration; UCL 1.12 adds functional `append`,
       concatenation, and list support in `slice` and `find`)
-- [ ] A source formatter (`ucl fmt`)
+- [x] A source formatter (`ucl fmt`) with deterministic layout, comment
+      preservation, idempotent output, and a CI-friendly `--check` mode;
+      this completes the roadmap (UCL 1.14)
 - [x] Scripting ergonomics: inline programs with `-e/--eval`, piped input
       through `-`, and the `int()` conversion built-in (UCL 1.8)
 

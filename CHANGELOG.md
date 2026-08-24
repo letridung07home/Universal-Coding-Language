@@ -2,6 +2,26 @@
 
 All notable changes to UCL are documented here.
 
+## 1.14.0 - 2026-08-24
+
+### Added
+
+- `ucl fmt`, a deterministic source formatter, completing the roadmap:
+  - `ucl fmt <file>` rewrites the file in place; `ucl fmt -` pipes stdin to
+    stdout; `--check` exits 1 when a file needs formatting (CI gate).
+  - Four-space indentation, one statement per line, canonical operator
+    spacing, expanded blocks; multiline list literals stay expanded.
+  - Comments are preserved: trailing comments stay on their line, others
+    become standalone lines at the enclosing indentation; nothing is ever
+    dropped.
+  - Formatting is idempotent and preserves evaluation exactly (literals are
+    reproduced verbatim from their source spans); property tests check both
+    invariants over a corpus and thousands of random inputs.
+  - The lexer exposes `tokenize_with_comments`, a secondary stream of
+    comment spans; the plain token stream is unchanged.
+  - Formatter behavior is covered by a new "Source formatter" section in
+    the compatibility guarantees.
+
 ## 1.13.0 - 2026-08-23
 
 ### Changed

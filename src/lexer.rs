@@ -86,6 +86,28 @@ pub struct Token {
     pub span: Span,
 }
 
+/// A comment encountered during tokenization.
+///
+/// Comments produce no tokens, but the formatter needs to know where they
+/// appeared so it can preserve them; the span is recovered from the source
+/// text when rendering.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommentKind {
+    /// A `//` line comment, ending before its newline.
+    Line,
+    /// A `/* ... */` block comment, which may span lines and nest.
+    Block,
+}
+
+/// A comment's kind together with its source span.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CommentTrivia {
+    /// Whether the comment is a line or block comment.
+    pub kind: CommentKind,
+    /// The byte span covering the entire comment text.
+    pub span: Span,
+}
+
 /// Converts source text into a vector of [`Token`]s.
 ///
 /// The lexer performs lexical analysis, breaking source text into tokens
@@ -118,9 +140,24 @@ impl<'src> Lexer<'src> {
     /// character, an error diagnostic is emitted and scanning continues
     /// to allow reporting multiple lexical errors.
     pub fn tokenize(&self, sink: &mut DiagnosticSink) -> Vec<Token> {
+        self.tokenize_with_comments(sink).0
+    }
+
+    /// Tokenizes like [`Lexer::tokenize`] and also reports every comment
+    /// encountered, in source order.
+    ///
+    /// Comments produce no tokens; this secondary stream exists for tools
+    /// such as the formatter that must reproduce them. The scanning rules
+    /// are identical to tokenization's, so a source with lexical errors may
+    /// yield a partial comment list.
+    pub fn tokenize_with_comments(
+        &self,
+        sink: &mut DiagnosticSink,
+    ) -> (Vec<Token>, Vec<CommentTrivia>) {
         let contents = self.source.contents();
         let bytes = contents.as_bytes();
         let mut tokens = Vec::new();
+        let mut comments = Vec::new();
         let mut import_context = ImportContext::None;
         let mut pos = 0;
 
@@ -136,9 +173,14 @@ impl<'src> Lexer<'src> {
             // Line comments: `//` runs to the end of the line and is
             // ignored, so a comment may appear wherever whitespace may.
             if byte == b'/' && pos + 1 < bytes.len() && bytes[pos + 1] == b'/' {
+                let start = pos;
                 while pos < bytes.len() && bytes[pos] != b'\n' {
                     pos += 1;
                 }
+                comments.push(CommentTrivia {
+                    kind: CommentKind::Line,
+                    span: Span::new(start, pos),
+                });
                 continue;
             }
 
@@ -168,6 +210,11 @@ impl<'src> Lexer<'src> {
                         Diagnostic::error("unterminated block comment")
                             .at(Span::new(start, contents.len())),
                     );
+                } else {
+                    comments.push(CommentTrivia {
+                        kind: CommentKind::Block,
+                        span: Span::new(start, pos),
+                    });
                 }
                 continue;
             }
@@ -352,7 +399,7 @@ impl<'src> Lexer<'src> {
             span: Span::new(pos, pos),
         });
 
-        tokens
+        (tokens, comments)
     }
 }
 
