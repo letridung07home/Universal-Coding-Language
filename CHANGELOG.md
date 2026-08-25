@@ -2,6 +2,18 @@
 
 All notable changes to UCL are documented here.
 
+## 1.17.0 - 2026-08-25
+
+### Internal
+
+- Performance optimization of the evaluator's per-construct dispatch methods
+  (`eval_while`, `eval_for`, `eval_assignment`, `eval_call`, etc.) introduced
+  in `v1.16.1`: reduced `pending_flow` overhead and streamlined resource-state
+  checks in the evaluation loop (`src/evaluator/mod.rs`). No behavior change:
+  diagnostics, semantics, resource limits, and compatibility guarantees are
+  identical; observable performance improves for long-running loops and deep
+  call stacks.
+
 ## 1.16.1 - 2026-08-24
 
 ### Internal
