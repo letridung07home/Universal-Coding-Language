@@ -12,7 +12,6 @@ All notable changes to UCL are documented here.
   nested list-growth loops from exhausting host memory before the cumulative
   allocation budget trips. The fuzz timeout and OOM inputs are retained as
   pipeline regression seeds.
-- The fuzz artifact upload uses the current Node 24-compatible action release.
 
 ## 1.16.1 - 2026-08-24
 
