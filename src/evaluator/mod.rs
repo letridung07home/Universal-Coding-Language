@@ -1768,11 +1768,7 @@ impl Evaluator {
 
     /// Charges the backing-vector storage needed for `count` list elements.
     fn charge_list_elements(&self, count: usize, span: Span, sink: &mut DiagnosticSink) -> bool {
-        self.charge_allocation(
-            count.saturating_mul(VALUE_SLOT_BYTES),
-            span,
-            sink,
-        )
+        self.charge_allocation(count.saturating_mul(VALUE_SLOT_BYTES), span, sink)
     }
 
     /// Charges one unit of evaluator fuel and reports exhaustion once.
