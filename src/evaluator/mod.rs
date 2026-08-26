@@ -839,10 +839,7 @@ impl Evaluator {
             }
             match iterable {
                 Value::Str(text) => {
-                    let count = text
-                        .chars()
-                        .take(MAX_LOOP_ITERATIONS as usize + 1)
-                        .count();
+                    let count = text.chars().take(MAX_LOOP_ITERATIONS as usize + 1).count();
                     if !self.charge_list_elements(count, node.span, sink) {
                         return Value::Unit;
                     }

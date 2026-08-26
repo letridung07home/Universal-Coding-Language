@@ -1994,9 +1994,7 @@ fn work_budget_bounds_nested_runaway_loops() {
     // their total work. The evaluator-wide fuel budget must stop this input
     // without waiting for the inner and outer loop caps to be exhausted.
     let started = std::time::Instant::now();
-    let (value, sink) = eval(
-        "let i = 8; while i < 100000 { while i < 100000 { i = i + 0; }; };",
-    );
+    let (value, sink) = eval("let i = 8; while i < 100000 { while i < 100000 { i = i + 0; }; };");
     assert!(
         started.elapsed() < std::time::Duration::from_secs(2),
         "nested runaway loops must be stopped quickly"
