@@ -374,17 +374,19 @@ that never becomes `false` cannot hang the interpreter.
 Evaluation also carries a deterministic **cumulative allocation budget**
 (currently 256 MiB): every operation that builds new value data charges its
 cost — string concatenation and case mapping charge the bytes they copy,
-`trim`, `slice`, and `replace` charge their result, and list concatenation
-charges every element copied. Exceeding the budget aborts evaluation with
-an error, so programs whose work grows quadratically — such as repeatedly
-concatenating onto a growing string or re-mapping a large one — stop
-quickly instead of running unbounded. Ordinary accumulation through
-`acc = acc + text`, `items = append(items, x)`, and `items = items + [x]`
-assignments is linear and stays far below the budget.
+`trim`, `slice`, and `replace` charge their result, and list operations charge
+the backing-vector slots they reserve. Exceeding the budget aborts evaluation
+with an error, so programs whose work grows quadratically — such as repeatedly
+concatenating onto a growing string or re-mapping a large one — stop quickly
+instead of running unbounded. Ordinary accumulation through `acc = acc + text`,
+`items = append(items, x)`, and `items = items + [x]` assignments is linear and
+stays far below the budget.
 
-Work that only *reads* existing values is not charged: comparing or
-searching a very large value inside a long loop stays bounded by the loop
-cap times the value size, but may still take wall-clock time.
+A separate deterministic **evaluation work budget** (currently 2,000,000 AST
+node evaluations) applies to one complete evaluation. It prevents independent
+loop caps from multiplying without bound in nested loops and also bounds work
+that only reads existing values. Exceeding either budget aborts evaluation with
+an error; these limits are independent of the per-loop 100,000-iteration cap.
 
 ### 4.7 For loops
 
@@ -616,6 +618,8 @@ source span. Errors include:
   exporting a name that collides with an existing binding;
 - a loop exceeding the maximum iteration count;
 - constructing a string value larger than the 8 MiB UTF-8 byte limit;
+- exceeding the cumulative allocation budget (currently 256 MiB) or the
+  evaluation work budget (currently 2,000,000 AST node evaluations);
 - a function call exceeding the maximum active-call depth (currently 128);
 - expression nesting that exceeds the parser's or evaluator's depth limit.
 

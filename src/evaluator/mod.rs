@@ -22,6 +22,7 @@
 use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
 use std::collections::HashSet;
+use std::mem::size_of;
 use std::rc::Rc;
 
 use crate::diagnostic::{Diagnostic, DiagnosticSink, Severity};
@@ -68,16 +69,34 @@ const MAX_STRING_BYTES: usize = 8 * 1024 * 1024;
 /// data each run moves: a capped loop whose body concatenates a growing
 /// string performs quadratic work and can take tens of seconds even though
 /// every individual operation is legal and bounded. This budget charges the
-/// data cost of building values — UTF-8 bytes for strings, element counts
-/// for lists — across the whole evaluation, so total work stays
+/// data cost of building values — UTF-8 bytes for strings and backing-vector
+/// slot bytes for lists — across the whole evaluation, so total work stays
 /// deterministic and small regardless of program shape.
 ///
 /// Charging follows each operation's real data movement: string operations
 /// charge the UTF-8 bytes they copy, so accumulate-in-a-loop concatenation
 /// — quadratic in practice — trips the budget within a fraction of a
-/// second. List growth charges only newly added elements, so ordinary list
-/// building stays unaffected at any practical size.
+/// second. List growth charges the backing-vector slots it adds, so ordinary
+/// list building stays unaffected at any practical size.
 const MAX_TOTAL_VALUE_BYTES: usize = 256 * 1024 * 1024;
+
+/// The maximum amount of evaluator work performed by one evaluation.
+///
+/// A loop limit applies to each loop independently, so nested loops could
+/// otherwise multiply their work without bound. This fuel counter is charged
+/// once per AST node evaluation and gives the complete evaluator a fixed
+/// worst-case bound, including programs whose loops only read or rebuild
+/// already-bounded values.
+const MAX_EVAL_STEPS: usize = 2_000_000;
+
+/// The number of bytes reserved for one element slot in a list value.
+///
+/// Lists store complete [`Value`] instances inline in their backing vector.
+/// Treating a list element as one byte in the allocation budget allowed a
+/// nested loop to create hundreds of millions of slots before the nominal
+/// 256 MiB budget was reached. Charging the actual slot size keeps the budget
+/// aligned with the memory the vector reserves.
+const VALUE_SLOT_BYTES: usize = size_of::<Value>();
 
 /// The maximum number of active UCL function calls.
 ///
@@ -108,6 +127,9 @@ pub struct Evaluator {
     /// Cumulative bytes of value data built so far in this evaluation,
     /// charged against [`MAX_TOTAL_VALUE_BYTES`].
     allocated_bytes: Cell<usize>,
+    /// AST nodes evaluated so far in this evaluation, charged against
+    /// [`MAX_EVAL_STEPS`].
+    eval_steps: Cell<usize>,
     /// A control-flow signal executed by the innermost active construct,
     /// waiting to be consumed at that construct's boundary.
     pending_flow: RefCell<Option<Flow>>,
@@ -116,12 +138,14 @@ impl Evaluator {
     /// Creates a new evaluator instance.
     ///
     /// The evaluator may be reused to evaluate multiple ASTs; each evaluation
-    /// resets its active function-call counter, resource state, and any pending control-flow signal.
+    /// resets its active function-call counter, resource state, work budget,
+    /// and any pending control-flow signal.
     pub fn new() -> Self {
         Self {
             call_depth: Cell::new(0),
             resource_exhausted: Cell::new(false),
             allocated_bytes: Cell::new(0),
+            eval_steps: Cell::new(0),
             pending_flow: RefCell::new(None),
         }
     }
@@ -181,6 +205,7 @@ impl Evaluator {
         self.call_depth.set(0);
         self.resource_exhausted.set(false);
         self.allocated_bytes.set(0);
+        self.eval_steps.set(0);
         self.pending_flow.borrow_mut().take();
         let baseline = sink.len();
         let value = self.eval(root, source, environment, sink, 0);
@@ -247,6 +272,9 @@ impl Evaluator {
         if self.resource_exhausted.get() || sink.is_full() {
             return Value::Unit;
         }
+        if !self.charge_eval_step(node.span, sink) {
+            return Value::Unit;
+        }
         if depth >= MAX_EVAL_DEPTH {
             sink.emit(Diagnostic::error("evaluation nesting is too deep").at(node.span));
             return Value::Unit;
@@ -282,6 +310,9 @@ impl Evaluator {
                     if self.has_pending_flow() || self.resource_exhausted.get() || sink.is_full() {
                         return Value::Unit;
                     }
+                }
+                if !self.charge_list_elements(values.len(), node.span, sink) {
+                    return Value::Unit;
                 }
                 Value::List(Rc::new(values))
             }
@@ -354,7 +385,9 @@ impl Evaluator {
                     }
                 };
                 let value = unescape_string(text);
-                if self.check_string_size(value.len(), node.span, sink) {
+                if self.check_string_size(value.len(), node.span, sink)
+                    && self.charge_allocation(value.len(), node.span, sink)
+                {
                     Value::Str(value)
                 } else {
                     Value::Unit
@@ -712,6 +745,9 @@ impl Evaluator {
                 break;
             }
             let condition_value = self.eval(condition, source, environment, sink, depth + 1);
+            if self.resource_exhausted.get() || sink.is_full() {
+                break;
+            }
             match condition_value {
                 Value::Boolean(true) => {
                     self.eval(body, source, environment, sink, depth + 1);
@@ -763,6 +799,9 @@ impl Evaluator {
         let items = if let Some(start_expr) = start {
             let from_value = self.eval(start_expr, source, environment, sink, depth + 1);
             let to_value = self.eval(end, source, environment, sink, depth + 1);
+            if self.resource_exhausted.get() || sink.is_full() {
+                return Value::Unit;
+            }
             match (from_value, to_value) {
                 (Value::Integer(from), Value::Integer(to)) => {
                     // Half-open like `slice`; inverted and empty ranges
@@ -772,6 +811,9 @@ impl Evaluator {
                     // One extra item lets the executor distinguish a
                     // completed loop from one cut off by the cap.
                     let capped = count.min(MAX_LOOP_ITERATIONS + 1);
+                    if !self.charge_list_elements(capped as usize, node.span, sink) {
+                        return Value::Unit;
+                    }
                     Some(
                         (0..capped)
                             .map(|step| Value::Integer(from + step as i64))
@@ -792,17 +834,33 @@ impl Evaluator {
             }
         } else {
             let iterable = self.eval(end, source, environment, sink, depth + 1);
+            if self.resource_exhausted.get() || sink.is_full() {
+                return Value::Unit;
+            }
             match iterable {
-                Value::Str(text) => Some(
-                    text.chars()
-                        .map(|character| Value::Str(character.to_string()))
+                Value::Str(text) => {
+                    let count = text
+                        .chars()
                         .take(MAX_LOOP_ITERATIONS as usize + 1)
-                        .collect(),
-                ),
+                        .count();
+                    if !self.charge_list_elements(count, node.span, sink) {
+                        return Value::Unit;
+                    }
+                    Some(
+                        text.chars()
+                            .map(|character| Value::Str(character.to_string()))
+                            .take(MAX_LOOP_ITERATIONS as usize + 1)
+                            .collect(),
+                    )
+                }
                 Value::List(elements) => {
                     // One extra element lets the executor distinguish a
                     // completed loop from one cut off by the cap; the list
                     // is shared, so copy rather than truncate.
+                    let count = elements.len().min(MAX_LOOP_ITERATIONS as usize + 1);
+                    if !self.charge_list_elements(count, node.span, sink) {
+                        return Value::Unit;
+                    }
                     Some(
                         elements
                             .iter()
@@ -1099,7 +1157,9 @@ impl Evaluator {
                     return Value::Unit;
                 }
                 let text = values[0].display_text();
-                if !self.check_string_size(text.len(), span, sink) {
+                if !self.check_string_size(text.len(), span, sink)
+                    || !self.charge_allocation(text.len(), span, sink)
+                {
                     return Value::Unit;
                 }
                 Value::Str(text)
@@ -1108,7 +1168,11 @@ impl Evaluator {
                 if !Self::check_arity(BuiltinFunction::Type.name(), values, 1, span, sink) {
                     return Value::Unit;
                 }
-                Value::Str(values[0].type_name().to_owned())
+                let text = values[0].type_name().to_owned();
+                if !self.charge_allocation(text.len(), span, sink) {
+                    return Value::Unit;
+                }
+                Value::Str(text)
             }
             BuiltinFunction::Int => {
                 if !Self::check_arity(BuiltinFunction::Int.name(), values, 1, span, sink) {
@@ -1236,7 +1300,9 @@ impl Evaluator {
                                 return Value::Unit;
                             }
                             let replaced = source.replace(pattern.as_str(), replacement);
-                            if !self.charge_allocation(replaced.len(), span, sink) {
+                            if !self.check_string_size(replaced.len(), span, sink)
+                                || !self.charge_allocation(replaced.len(), span, sink)
+                            {
                                 return Value::Unit;
                             }
                             return Value::Str(replaced);
@@ -1403,7 +1469,7 @@ impl Evaluator {
                         }
                         let (start, end) = (*start as usize, *end as usize);
                         let charge = end - start;
-                        if !self.charge_allocation(charge, span, sink) {
+                        if !self.charge_list_elements(charge, span, sink) {
                             return Value::Unit;
                         }
                         return Value::List(Rc::new(elements[start..end].to_vec()));
@@ -1440,8 +1506,12 @@ impl Evaluator {
                         // reuses it in place instead of copying every
                         // element; an aliased list is copied transparently,
                         // so observable behavior is identical either way.
-                        // Growth-based charge: see MAX_TOTAL_VALUE_BYTES.
-                        if !self.charge_allocation(1, span, sink) {
+                        // A call receives a cloned `Rc`, so this general path
+                        // copies the existing backing vector before pushing.
+                        // Charge the slots that the copy reserves, not just
+                        // the newly appended element.
+                        let charge = elements.len().saturating_add(1);
+                        if !self.charge_list_elements(charge, span, sink) {
                             return Value::Unit;
                         }
                         let mut appended = Rc::clone(elements);
@@ -1541,7 +1611,7 @@ impl Evaluator {
                         // the budget charges that copy. See
                         // MAX_TOTAL_VALUE_BYTES.
                         let charge = a.len().saturating_add(b.len());
-                        if !self.charge_allocation(charge, span, sink) {
+                        if !self.charge_list_elements(charge, span, sink) {
                             return Value::Unit;
                         }
                         let mut concatenated = a.as_ref().clone();
@@ -1675,9 +1745,9 @@ impl Evaluator {
     /// Charges `bytes` of newly built value data against the evaluation's
     /// cumulative allocation budget.
     ///
-    /// Strings are charged their UTF-8 length; lists are charged element
-    /// counts (the cost model is documented on
-    /// [`MAX_TOTAL_VALUE_BYTES`]). When the budget is exhausted the
+    /// Strings are charged their UTF-8 length; list backing vectors are
+    /// charged through [`Evaluator::charge_list_elements`] using their actual
+    /// [`Value`] slot size. When the budget is exhausted the
     /// resource-exhausted flag is set — every loop and expression site
     /// already stops on it — and an error is reported once.
     fn charge_allocation(&self, bytes: usize, span: Span, sink: &mut DiagnosticSink) -> bool {
@@ -1693,6 +1763,32 @@ impl Evaluator {
             return false;
         }
         self.allocated_bytes.set(total);
+        true
+    }
+
+    /// Charges the backing-vector storage needed for `count` list elements.
+    fn charge_list_elements(&self, count: usize, span: Span, sink: &mut DiagnosticSink) -> bool {
+        self.charge_allocation(
+            count.saturating_mul(VALUE_SLOT_BYTES),
+            span,
+            sink,
+        )
+    }
+
+    /// Charges one unit of evaluator fuel and reports exhaustion once.
+    fn charge_eval_step(&self, span: Span, sink: &mut DiagnosticSink) -> bool {
+        let steps = self.eval_steps.get().saturating_add(1);
+        if steps > MAX_EVAL_STEPS {
+            self.resource_exhausted.set(true);
+            sink.emit(
+                Diagnostic::error(format!(
+                    "evaluation exceeded its maximum work budget of {MAX_EVAL_STEPS} steps"
+                ))
+                .at(span),
+            );
+            return false;
+        }
+        self.eval_steps.set(steps);
         true
     }
 
@@ -1853,7 +1949,7 @@ impl Evaluator {
         } else {
             elements.len().saturating_add(1)
         };
-        if !self.charge_allocation(charge, expression_span, sink) {
+        if !self.charge_list_elements(charge, expression_span, sink) {
             return Some(Value::Unit);
         }
         Rc::make_mut(elements).push(appended);
@@ -1901,7 +1997,7 @@ impl Evaluator {
         } else {
             elements.len().saturating_add(appended.len())
         };
-        if !self.charge_allocation(charge, expression_span, sink) {
+        if !self.charge_list_elements(charge, expression_span, sink) {
             return Some(Value::Unit);
         }
         Rc::make_mut(elements).extend(appended);

@@ -1989,6 +1989,46 @@ fn allocation_budget_bounds_runaway_string_accumulation() {
 }
 
 #[test]
+fn work_budget_bounds_nested_runaway_loops() {
+    // Each loop is individually capped, but nested loops can still multiply
+    // their total work. The evaluator-wide fuel budget must stop this input
+    // without waiting for the inner and outer loop caps to be exhausted.
+    let started = std::time::Instant::now();
+    let (value, sink) = eval(
+        "let i = 8; while i < 100000 { while i < 100000 { i = i + 0; }; };",
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "nested runaway loops must be stopped quickly"
+    );
+    assert!(sink.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("evaluation exceeded its maximum work budget")
+    }));
+    assert_eq!(value, None);
+}
+
+#[test]
+fn allocation_budget_bounds_nested_list_growth() {
+    // List slots are real Value-sized allocations. A nested loop must not be
+    // able to create hundreds of millions of elements before a nominal
+    // byte-budget expressed in element counts notices.
+    let (value, sink) = eval(
+        "let items = []; let i = 8; while i < 100000 { items = items + [i]; i = i + 0; while i < 100000 { items = items + [i]; i = i + 0; }; }; items;",
+    );
+    assert_eq!(value, None);
+    assert!(sink.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("evaluation exceeded its total allocation budget")
+            || diagnostic
+                .message
+                .contains("evaluation exceeded its maximum work budget")
+    }));
+}
+
+#[test]
 fn allocation_budget_bounds_aliased_list_copying() {
     // Aliasing the list inside the loop forces a full copy per append;
     // the budget charges that copy and stops the loop early.

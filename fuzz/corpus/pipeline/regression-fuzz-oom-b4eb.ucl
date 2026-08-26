@@ -1,0 +1,1 @@
+let items = []; let i = 8; while i < 100000 { items = items + [i]; i = i + 0; while i < 100000 { items = items + [i]; i = i + 0; } do }; doneitems;

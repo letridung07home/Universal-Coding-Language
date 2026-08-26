@@ -2,6 +2,18 @@
 
 All notable changes to UCL are documented here.
 
+## Unreleased
+
+### Fixed
+
+- The evaluator now bounds total AST work across an evaluation, preventing
+  independently capped nested loops from timing out the fuzz pipeline.
+- List allocation accounting charges the actual `Value` slot size, preventing
+  nested list-growth loops from exhausting host memory before the cumulative
+  allocation budget trips. The fuzz timeout and OOM inputs are retained as
+  pipeline regression seeds.
+- The fuzz artifact upload uses the current Node 24-compatible action release.
+
 ## 1.16.1 - 2026-08-24
 
 ### Internal
