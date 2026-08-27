@@ -2,6 +2,31 @@
 
 All notable changes to UCL are documented here.
 
+## 1.17.1 - 2026-08-27
+
+### Fixed
+
+- Regenerated the root and fuzz-workspace lockfiles for version `1.17.1`,
+  allowing the repository's locked formatting, test, documentation, lint,
+  fuzz-target compilation, and release-build commands to run without
+  attempting to modify a lockfile.
+
+## 1.17.0 - 2026-08-25
+
+### Fixed
+
+- Restored a release-compatible Rust toolchain configuration by selecting the
+  default profile, ensuring the formatter and linter components required by CI
+  are available during release builds. The evaluator optimization that could
+  compromise cross-compilation remains excluded; language behavior,
+  diagnostics, resource limits, and compatibility guarantees are unchanged.
+
+### Documented
+
+- Added the completed `v1` release plan and the proposed `v2.0.0` goal, which
+  scopes static type checking as a future major-version change rather than a
+  breaking change within the stable `v1.x` line.
+
 ## 1.16.1 - 2026-08-24
 
 ### Internal

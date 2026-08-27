@@ -116,3 +116,38 @@ Refactor work tracked for future releases; none changes language behavior:
 - [x] Decompose the evaluator's monolithic statement dispatcher
       (~710 lines) into per-construct methods and group the built-in
       dispatcher by category, with no behavior change (UCL 1.16.1)
+- [x] Performance optimization of the evaluator's per-construct dispatch
+      methods (`eval_while`, `eval_for`, `eval_assignment`, etc.):
+      reduced `pending_flow` overhead and streamlined resource-state
+      checks through `should_stop_evaluation()` (UCL 1.17.0)
+
+### Release pipeline status
+
+- **UCL 1.17.0** released (`v1.17.0` tag on `main`, commit `366ecdc`).
+  The release workflow (`.github/workflows/release.yml`) reported
+  failures for all platform build jobs (Linux x86_64, macOS aarch64,
+  macOS x86_64, Windows x86_64) — artifacts (`sha256sums.txt`, binary
+  archives) were not produced. The publish step was skipped. Note:
+  binary artifacts require a `cargo` build environment; this sandbox
+  does not provide `rustc`/`cargo`, so artifacts must be built locally
+  or via a fully configured CI runner.
+- The Fuzz workflow (`.github/workflows/fuzz.yml`) also reported a
+  failure (`main` branch, 2026-08-25 03:48); this should be
+  investigated independently.
+
+### Next direction: v2.0.0
+
+Future work is no longer a blank page. `docs/v2-goal.md` defines the
+major version goal: **optional static type annotations and compile-time
+type checking** (`docs/v2-goal.md`). This replaces the pure dynamic-type
+policy guaranteed since `v1.0` (`docs/spec.md` §3, `docs/guarantees.md`).
+The v2 release requires:
+
+- At least one declared `**Breaking**` heading in `CHANGELOG.md`.
+- `docs/guarantees.md` rewritten with the new static-checking contract.
+- `Cargo.toml` bumped to `2.0.0`.
+- `docs/spec.md` updated with type syntax (`int`, `bool`, `string`, `list`,
+  `function`, `unit`, `module`).
+
+The sequential capstone plan (`1.18.0`, `1.19.0`) leading to `v2.0.0`
+is documented in `docs/v1-release-plan.md`.
