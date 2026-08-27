@@ -1,10 +1,10 @@
 # UCL v1.x Release Plan — Sequential Capstone Before v2.0.0
 
-**Current version:** `1.16.1` (internal quality — decomposed evaluator monolith)  
+**Current version:** `1.18.0` (resolved import-graph tooling)
 **Target final v1 release:** `1.19.0` (capstone)  
 **Next major version:** `2.0.0` (goal: `docs/v2-goal.md` — static type checking)  
-**Plan status:** Draft — not scheduled  
-**Branch:** `arena/01a03a0c-universal-coding-language`
+**Plan status:** `1.17.0` and `1.18.0` complete; `1.19.0` remains planned
+**Branch:** `main`
 
 ---
 
@@ -58,31 +58,27 @@ Every `v1.x` release in this plan must follow these rules; violation requires pr
 
 ---
 
-### 1.18.0 — Module & Import Tooling
+### 1.18.0 — Resolved Import-Graph Tooling
 
-**Theme:** Expand module functionality without breaking import contracts.  
-**Target date:** Not scheduled.  
-**Version type:** Minor (`1.18.0` — new syntax or behavior, fully backward-compatible).
+**Theme:** Make module resolution observable without changing import contracts.
+**Status:** Completed on 2026-08-28.
+**Version type:** Minor (`1.18.0` — additive and backward-compatible).
 
-**Technical focus:**
-- Add optional module-level documentation comments (`/* doc */` syntax enhancement, or new meta-syntax) that the formatter (`ucl fmt`) preserves.
-- Improve import error diagnostics (`src/module.rs`): when a module is not found, list all tried candidate paths with byte spans for the `use` statement.
-- Add a new CLI option (`ucl --list-imports`) that reports resolved import graph for debugging (additive CLI flag; does not change existing behavior of `-p/--path` or `UCL_PATH`).
-- Potential new built-in function for module inspection (e.g., `module_names()`) — must return a new `Value` variant? No; must reuse `Value::Str` or `Value::List` to avoid breaking exhaustive matchers. If a new value form is needed, it must be an additive variant with a compatibility exception declared in `docs/guarantees.md` (as `1.2` did for `Value::Module`).
+**Delivered:**
+- Added `ucl --list-imports [--path <dir>]... <file>`, which prints the
+  canonical root and resolved transitive `importer -> imported` edges in
+  deterministic depth-first source order without evaluating UCL code.
+- Added `ucl::module::{ImportGraph, ImportGraphEdge, resolved_import_graph}`
+  for Rust tooling that needs the same resolution-only traversal.
+- Reused the evaluator's established relative lookup, extensionless fallback,
+  `-p/--path` and `UCL_PATH` precedence, missing-path reporting, and cycle
+  detection rather than introducing a second resolution policy.
+- Added end-to-end coverage for transitive traversal, search-path resolution,
+  non-evaluation, missing imports, and invalid flag invocations; documented
+  the command in the README, development guide, and CLI compatibility contract.
 
-**Deliverables:**
-- Enhanced `docs/spec.md` with any new syntax (additive sections only).
-- Updated `docs/guarantees.md` if a new `Value` variant is added (with declared exception, matching `1.2` and `1.12` precedent).
-- `CHANGELOG.md` entry for `1.18.0`.
-
-**Checklist:**
-- [ ] All `v1.17.0` checklist items pass.
-- [ ] Import resolution (`src/module.rs`) unchanged for existing code (no behavior change to `use "path";` or `use "path" as math;`).
-- [ ] Module cycle detection behavior preserved.
-- [ ] Fuzz targets (`fuzz/lexer`, `fuzz/parser`, `fuzz/pipeline`) compile on nightly (`cargo +nightly fuzz run` check in CI, not full run).
-- [ ] New CLI flag documented in `README.md` and `docs/development.md`.
-
-**Break declared:** None (additive only; any new `Value` or `AstKind` variant requires a compatibility note in `docs/guarantees.md`, not a `Breaking` heading).
+**Break declared:** None. No language syntax, runtime value, import-resolution,
+or existing command-line behavior changed.
 
 ---
 
@@ -121,9 +117,9 @@ Every `v1.x` release in this plan must follow these rules; violation requires pr
 
 | Version | Type | Theme | Breaking? | Key deliverable |
 |---------|------|-------|-----------|-----------------|
-| `1.16.1` | Patch/minor (current) | Evaluator decomposition | None | Clean `CHANGELOG.md`, no `Breaking` |
-| `1.17.0` | Minor | Performance / evaluator optimization | None | Benchmarks, `CHANGELOG.md`, `docs/development.md` |
-| `1.18.0` | Minor | Module/tooling enhancement | None (additive only; compatibility note if new variants) | `docs/spec.md` update, CLI flag, `CHANGELOG.md` |
+| `1.16.1` | Patch | Evaluator decomposition | None | Complete |
+| `1.17.0` | Minor | Resource-limit resilience | None | Complete |
+| `1.18.0` | Minor | Resolved import-graph tooling | None | CLI and public-library inspection API |
 | `1.19.0` | Minor | Final `v1` capstone / `v2` prep | None | `CHANGELOG.md`, `docs/guarantees.md` audit, `README.md`, artifact verification |
 | `2.0.0` | **Major** | Static type checking (`docs/v2-goal.md`) | **Yes** — declared in `CHANGELOG.md` (`Breaking` heading) | `docs/guarantees.md` rewritten, `docs/spec.md` updated, `Cargo.toml` = `2.0.0` |
 

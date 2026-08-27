@@ -7,7 +7,7 @@ provides an interpreter with a lexer, parser, evaluator, file-based modules,
 an interactive REPL, a command-line interface, and source-aware diagnostics.
 
 > [!NOTE]
-> UCL 1.14 follows the first stable release: the language, CLI, library API, and
+> UCL 1.18 follows the first stable release: the language, CLI, library API, and
 > error categories are covered by [compatibility guarantees](docs/guarantees.md).
 > It remains a deliberately small language — not a batteries-included
 > general-purpose scripting environment.
@@ -32,6 +32,8 @@ an interactive REPL, a command-line interface, and source-aware diagnostics.
 - File-based modules: `use "path";` and `use "path" as math;`, with
   extensionless import paths, `-p/--path` search directories, and the
   `UCL_PATH` environment variable
+- Read-only import-graph inspection through `ucl --list-imports`, with the
+  same path-resolution behavior as evaluated modules and no program execution
 - Line comments (`//`) and nesting block comments (`/* */`)
 - String comparisons (`<`, `<=`, `>`, `>=`)
 - Error diagnostics with source excerpts
@@ -69,6 +71,15 @@ Format a file in place (or pipe through stdin) with the formatter:
 $ ucl fmt example.ucl
 $ cat messy.ucl | ucl fmt -
 $ ucl fmt --check src.ucl   # exits 1 when src.ucl needs formatting
+```
+
+Inspect resolved module dependencies without evaluating the program:
+
+```console
+$ ucl --list-imports -p ./lib app.ucl
+/path/to/app.ucl
+/path/to/app.ucl -> /path/to/lib/math.ucl
+/path/to/lib/math.ucl -> /path/to/lib/numbers.ucl
 ```
 
 Use `cargo run -- --help` to display command-line help, or start an
@@ -193,16 +204,17 @@ equality, and `for` iteration, UCL 1.12 completes the list toolkit
 with functional `append`, list concatenation through `+`, and list support
 in the `slice` and `find` built-ins, and UCL 1.13 is an internal-quality
 release that makes AST classification compiler-enforced and stores lists
-behind shared references, UCL 1.14 completes the roadmap with a
-deterministic source formatter: `ucl fmt` rewrites files in place, pipes
-stdin to stdout, supports CI checks with `--check`, and preserves comments.
-UCL 1.15 adds a deterministic cumulative allocation budget that stops
-pathological accumulation programs quickly, makes list accumulation through
-assignment linear in total work, and raises the fuzz workflow's per-run
-timeout to 60 seconds; UCL 1.16 extends that budget to cover every
-value-copying built-in and list concatenation, and preserves fuzz artifacts
-when a nightly run fails. Future directions are sketched in the
-[project roadmap](docs/roadmap.md).
+behind shared references. UCL 1.14 completes the roadmap with a deterministic
+source formatter: `ucl fmt` rewrites files in place, pipes stdin to stdout,
+supports CI checks with `--check`, and preserves comments. UCL 1.15 adds a
+deterministic cumulative allocation budget that stops pathological accumulation
+programs quickly, makes list accumulation through assignment linear in total
+work, and raises the fuzz workflow's per-run timeout to 60 seconds; UCL 1.16
+extends that budget to cover every value-copying built-in and list
+concatenation, and preserves fuzz artifacts when a nightly run fails; UCL
+1.17 adds a cumulative loop-iteration budget; and UCL 1.18 adds a read-only
+resolved import graph through `ucl --list-imports`. Future directions are
+sketched in the [project roadmap](docs/roadmap.md).
 
 ## Contributing
 

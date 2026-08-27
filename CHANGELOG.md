@@ -2,6 +2,21 @@
 
 All notable changes to UCL are documented here.
 
+## 1.18.0 - 2026-08-28
+
+### Added
+
+- Added `ucl --list-imports [--path <dir>]... <file>`: a read-only module
+  inspection command that prints the canonical root file and each resolved
+  import edge in deterministic depth-first source order. It accepts ordinary
+  source files, standard input, or `--eval` source; applies `-p/--path` and
+  `UCL_PATH` with the same precedence and extensionless lookup rules as
+  evaluated `use` statements; detects malformed modules, missing paths, and
+  cycles; and never evaluates UCL code.
+- Added the additive public `ucl::module::{ImportGraph, ImportGraphEdge,
+  resolved_import_graph}` API so Rust tooling can perform the same safe,
+  resolution-only traversal without spawning the command-line program.
+
 ## 1.17.2 - 2026-08-27
 
 ### Fixed

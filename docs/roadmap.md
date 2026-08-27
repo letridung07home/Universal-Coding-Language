@@ -117,23 +117,25 @@ Refactor work tracked for future releases; none changes language behavior:
       (~710 lines) into per-construct methods and group the built-in
       dispatcher by category, with no behavior change (UCL 1.16.1)
 - [x] Performance optimization of the evaluator's per-construct dispatch
-      methods (`eval_while`, `eval_for`, `eval_assignment`, etc.):
-      reduced `pending_flow` overhead and streamlined resource-state
-      checks through `should_stop_evaluation()` (UCL 1.17.0)
+  methods (`eval_while`, `eval_for`, `eval_assignment`, etc.):
+  reduced `pending_flow` overhead and streamlined resource-state
+  checks through `should_stop_evaluation()` (UCL 1.17.0)
+- [x] Read-only import-graph inspection that resolves the complete transitive
+  `use` graph without evaluating source, mirrors module path precedence and
+  extensionless lookup, and is available from both `ucl --list-imports` and
+  the public `ucl::module` API (UCL 1.18.0)
 
 ### Release pipeline status
 
-- **UCL 1.17.0** released (`v1.17.0` tag on `main`, commit `366ecdc`).
-  The release workflow (`.github/workflows/release.yml`) reported
-  failures for all platform build jobs (Linux x86_64, macOS aarch64,
-  macOS x86_64, Windows x86_64) — artifacts (`sha256sums.txt`, binary
-  archives) were not produced. The publish step was skipped. Note:
-  binary artifacts require a `cargo` build environment; this sandbox
-  does not provide `rustc`/`cargo`, so artifacts must be built locally
-  or via a fully configured CI runner.
-- The Fuzz workflow (`.github/workflows/fuzz.yml`) also reported a
-  failure (`main` branch, 2026-08-25 03:48); this should be
-  investigated independently.
+- **UCL 1.18.0** is prepared for release. The most recent successful release,
+  `v1.17.2`, produced the Linux x86_64, macOS (Apple Silicon and Intel), and
+  Windows x86_64 artifacts and their combined checksum manifest through
+  `.github/workflows/release.yml`.
+- The scheduled Fuzz workflow previously reported failures on 2026-08-26 and
+  2026-08-27. UCL 1.17.2 added a cumulative loop-iteration budget to cover the
+  reported nested-loop family, and the subsequent manually triggered fuzz run
+  completed successfully. Scheduled fuzzing remains part of the release-health
+  signal.
 
 ### Next direction: v2.0.0
 

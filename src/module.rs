@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use crate::diagnostic::{Diagnostic, DiagnosticSink};
 use crate::evaluator::{Environment, Evaluator, ModuleValue, Value};
 use crate::lexer::{Lexer, unescape_string};
-use crate::parser::Parser;
+use crate::parser::{AstKind, Parser};
 use crate::source::{SourceFile, Span};
 
 /// Per-session module bookkeeping owned by [`Environment`].
@@ -87,6 +87,28 @@ impl ModuleState {
     }
 }
 
+/// A directed edge in a resolved UCL import graph.
+///
+/// Both paths are canonical when the corresponding source files exist. The
+/// graph retains one edge for each `use` statement, in deterministic depth-first
+/// source order; shared modules are traversed only once.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImportGraphEdge {
+    /// The source file that contains the `use` statement.
+    pub importer: PathBuf,
+    /// The source file selected by that `use` statement.
+    pub imported: PathBuf,
+}
+
+/// A resolved import graph rooted at one UCL source file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImportGraph {
+    /// The root source file provided to the traversal.
+    pub root: PathBuf,
+    /// Directed import edges in deterministic depth-first source order.
+    pub edges: Vec<ImportGraphEdge>,
+}
+
 /// Resolves a decoded module path against the importing file's location and
 /// the session's search directories.
 ///
@@ -139,6 +161,155 @@ fn resolve_module_path(
             .collect::<Vec<_>>()
             .join("\n")
     ))
+}
+
+/// Extracts decoded import paths from one fully parsed source file.
+///
+/// The parser already enforces that `use` statements occur only at the program
+/// top level. Keeping this pass separate from evaluation means diagnostics and
+/// side effects are never triggered by import-graph inspection.
+fn source_imports(source: &SourceFile) -> Result<Vec<(Span, String)>, String> {
+    let mut sink = DiagnosticSink::new();
+    let tokens = Lexer::new(source).tokenize(&mut sink);
+    if sink.has_errors() {
+        return Err(first_diagnostic_message(&sink));
+    }
+    let Some(ast) = Parser::new(tokens).parse(&mut sink) else {
+        return Err(first_diagnostic_message(&sink));
+    };
+    if sink.has_errors() {
+        return Err(first_diagnostic_message(&sink));
+    }
+
+    let AstKind::Program { statements } = ast.kind else {
+        return Err("parser did not produce a program".to_owned());
+    };
+    let mut imports = Vec::new();
+    for statement in statements {
+        if let AstKind::Use { path, .. } = statement.kind {
+            let raw = source
+                .slice(path)
+                .ok_or_else(|| "invalid module path span".to_owned())?;
+            imports.push((path, unescape_string(raw)));
+        }
+    }
+    Ok(imports)
+}
+
+/// Returns the first diagnostic message from a failed lexing or parsing pass.
+fn first_diagnostic_message(sink: &DiagnosticSink) -> String {
+    sink.iter().next().map_or_else(
+        || "unknown error".to_owned(),
+        |diagnostic| diagnostic.message.clone(),
+    )
+}
+
+/// Traverses one already-resolved module without evaluating it.
+fn collect_module_imports(
+    module_path: &Path,
+    search_paths: &[PathBuf],
+    visiting: &mut HashSet<PathBuf>,
+    visited: &mut HashSet<PathBuf>,
+    edges: &mut Vec<ImportGraphEdge>,
+) -> Result<(), String> {
+    let contents = std::fs::read_to_string(module_path)
+        .map_err(|error| format!("cannot read module `{}`: {error}", module_path.display()))?;
+    let source = SourceFile::new(module_path.display().to_string(), contents);
+    let imports = source_imports(&source).map_err(|detail| {
+        format!(
+            "cannot inspect imports in `{}`: {detail}",
+            module_path.display()
+        )
+    })?;
+
+    for (_span, raw) in imports {
+        let imported = resolve_module_path(&source, &raw, search_paths)?;
+        edges.push(ImportGraphEdge {
+            importer: module_path.to_path_buf(),
+            imported: imported.clone(),
+        });
+        if visiting.contains(&imported) {
+            return Err(format!("circular import of `{}`", imported.display()));
+        }
+        if visited.insert(imported.clone()) {
+            visiting.insert(imported.clone());
+            let result = collect_module_imports(&imported, search_paths, visiting, visited, edges);
+            visiting.remove(&imported);
+            result?;
+        }
+    }
+    Ok(())
+}
+
+/// Resolves the complete import graph for `source` without evaluating UCL code.
+///
+/// Search paths have the same ordering and extensionless lookup behavior as an
+/// evaluated `use` statement. Any missing module, malformed source file, or
+/// cycle produces a diagnostic and returns `None`; therefore callers never
+/// receive a partial graph as a successful result.
+pub fn resolved_import_graph(
+    source: &SourceFile,
+    search_paths: &[PathBuf],
+    sink: &mut DiagnosticSink,
+) -> Option<ImportGraph> {
+    let root = Path::new(source.name())
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(source.name()));
+    let imports = match source_imports(source) {
+        Ok(imports) => imports,
+        Err(detail) => {
+            sink.emit(Diagnostic::error(format!(
+                "cannot inspect imports in `{}`: {detail}",
+                source.name()
+            )));
+            return None;
+        }
+    };
+
+    let mut edges = Vec::new();
+    let mut visiting = HashSet::from([root.clone()]);
+    let mut visited = HashSet::from([root.clone()]);
+    for (span, raw) in imports {
+        let imported = match resolve_module_path(source, &raw, search_paths) {
+            Ok(path) => path,
+            Err(message) => {
+                sink.emit(Diagnostic::error(message).at(span));
+                return None;
+            }
+        };
+        edges.push(ImportGraphEdge {
+            importer: root.clone(),
+            imported: imported.clone(),
+        });
+        if visiting.contains(&imported) {
+            sink.emit(
+                Diagnostic::error(format!("circular import of `{}`", imported.display())).at(span),
+            );
+            return None;
+        }
+        if visited.insert(imported.clone()) {
+            visiting.insert(imported.clone());
+            if let Err(detail) = collect_module_imports(
+                &imported,
+                search_paths,
+                &mut visiting,
+                &mut visited,
+                &mut edges,
+            ) {
+                sink.emit(
+                    Diagnostic::error(format!(
+                        "module `{}` failed to inspect: {detail}",
+                        imported.display()
+                    ))
+                    .at(span),
+                );
+                return None;
+            }
+            visiting.remove(&imported);
+        }
+    }
+
+    Some(ImportGraph { root, edges })
 }
 
 /// Reports that loading `module_path` failed by summarizing its first

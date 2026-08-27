@@ -12,7 +12,7 @@ pub mod diagnostic;
 pub mod evaluator;
 pub mod fmt;
 pub mod lexer;
-mod module;
+pub mod module;
 pub mod parser;
 pub mod source;
 
