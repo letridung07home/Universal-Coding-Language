@@ -85,14 +85,17 @@ created after a REPL reset; user bindings may shadow its names:
   Version 1.2 adds `AstKind::Member`, `Value::Module`, `ModuleValue`, and the
   contextual `TokenKind::ImportAs` token for aliased imports.
 - Deterministic resource limits are part of the language contract: the
-  8 MiB string-value limit, the 100,000-iteration loop cap, and — added in
-  UCL 1.15 — the 256 MiB cumulative allocation budget over value data built
-  during one evaluation, extended in UCL 1.16 to cover derived strings
-  (`upper`, `lower`, `trim`, `slice`, `replace`) and list concatenation.
-  Programs doing very large repeated transformations can now hit the
-  budget's deterministic error where they previously ran to completion;
-  accumulation through assignment remains linear and unaffected. Programs exceeding a limit fail with the
-  corresponding error; the constants may change only in declared releases.
+  8 MiB string-value limit, the 100,000-iteration cap for each loop, and —
+  added in UCL 1.17.2 — the 1,000,000-iteration cumulative cap across every
+  `while` and `for` loop in one evaluation. UCL 1.15 added the 256 MiB
+  cumulative allocation budget over value data built during one evaluation,
+  and UCL 1.16 extended it to cover derived strings (`upper`, `lower`,
+  `trim`, `slice`, `replace`) and list concatenation. Programs doing very
+  large repeated transformations or deeply nested looping can now hit the
+  relevant deterministic error where they previously ran to completion;
+  accumulation through assignment remains linear and unaffected. Programs
+  exceeding a limit fail with the corresponding error; the constants may
+  change only in declared releases.
 - One declared exception: UCL 1.13 changes `Value::List`'s payload from
   `Vec<Value>` to `Rc<Vec<Value>>`. The variant shipped in 1.11 with no known
   downstream consumers, so the payload change is announced here rather than
