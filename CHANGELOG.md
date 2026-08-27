@@ -2,6 +2,19 @@
 
 All notable changes to UCL are documented here.
 
+## 1.17.2 - 2026-08-27
+
+### Fixed
+
+- Added a deterministic cumulative loop-iteration budget of 1,000,000
+  iterations per evaluation. The existing 100,000-iteration cap remains in
+  place for each individual `while` or `for` loop; the new shared guard stops
+  nested loops from multiplying total evaluator work until scheduled fuzzing
+  times out. The guard is reset for every evaluation and reports one runtime
+  diagnostic when it is exceeded.
+- Added regression coverage for the nested-loop pattern preserved by the
+  failing scheduled fuzz run.
+
 ## 1.17.1 - 2026-08-27
 
 ### Fixed

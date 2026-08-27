@@ -369,7 +369,10 @@ to `unit`.
 
 A single loop may run at most a fixed number of iterations (currently
 100,000); exceeding that bound aborts the loop with an error, so a condition
-that never becomes `false` cannot hang the interpreter.
+that never becomes `false` cannot hang the interpreter. Across one evaluation,
+all `while` and `for` loops together may execute at most 1,000,000 iterations.
+Exceeding this cumulative budget aborts evaluation with an error, preventing
+nested loops from multiplying evaluator work beyond a deterministic bound.
 
 Evaluation also carries a deterministic **cumulative allocation budget**
 (currently 256 MiB): every operation that builds new value data charges its
@@ -421,8 +424,10 @@ value.
 
 Like `while`, a single `for` loop may run at most a fixed number of
 iterations (currently 100,000); exceeding that bound aborts the loop with an
-error. `break` and `continue` apply to `for` loops with the same meaning as
-in `while` loops (§5.4).
+error. Its iterations also count toward the 1,000,000-iteration cumulative
+evaluation budget shared by every `while` and `for` loop. `break` and
+`continue` apply to `for` loops with the same meaning as in `while` loops
+(§5.4).
 
 ## 5. Statements and blocks
 
@@ -614,7 +619,8 @@ source span. Errors include:
 - a `use` statement outside the top level of a program, with a non-string
   path, targeting an unreadable file, forming a circular import chain, or
   exporting a name that collides with an existing binding;
-- a loop exceeding the maximum iteration count;
+- a loop exceeding its per-loop iteration cap or the evaluation's
+  cumulative iteration budget;
 - constructing a string value larger than the 8 MiB UTF-8 byte limit;
 - a function call exceeding the maximum active-call depth (currently 128);
 - expression nesting that exceeds the parser's or evaluator's depth limit.

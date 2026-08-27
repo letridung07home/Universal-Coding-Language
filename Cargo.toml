@@ -1,6 +1,6 @@
 [package]
 name = "universal-coding-language"
-version = "1.17.1"
+version = "1.17.2"
 edition = "2024"
 rust-version = "1.85"
 description = "A universal coding language that excels in every task possible"

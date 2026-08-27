@@ -152,6 +152,35 @@ fn regression_append_loop_with_inert_counter_terminates() {
 }
 
 #[test]
+fn regression_nested_loops_hit_total_iteration_budget() {
+    // Each loop independently stays below the per-loop cap, but their work
+    // multiplies without a per-evaluation budget. The cumulative guard must
+    // stop the nested program promptly instead of letting fuzzing time out.
+    let source = r#"
+        let outer = 0;
+        while outer < 100000 {
+            let inner = 0;
+            while inner < 100000 {
+                inner = inner + 1;
+            };
+            outer = outer + 1;
+        };
+    "#;
+    let started = std::time::Instant::now();
+    let (value, sink) = eval(source);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "nested-loop evaluation should be bounded"
+    );
+    assert_eq!(value, None);
+    assert!(sink.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("evaluation exceeded its total iteration budget")
+    }));
+}
+
+#[test]
 fn blocks_introduce_new_scopes() {
     let (value, sink) = eval("let x = 5; { let x = 10; }; x;");
     assert!(!sink.has_errors());

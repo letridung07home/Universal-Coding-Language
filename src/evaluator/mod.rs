@@ -48,12 +48,20 @@ pub use value::{FunctionValue, ModuleValue, Value};
 /// program the parser accepts must never be rejected here.
 const MAX_EVAL_DEPTH: usize = 512;
 
-/// The maximum number of iterations a single `while` loop may run.
+/// The maximum number of iterations a single loop may run.
 ///
 /// Without a bound, `while true { }` would hang the interpreter forever.
 /// The cap also keeps fuzzing and long-lived embedding processes safe from
 /// runaway loops; legitimate programs rarely approach it.
 const MAX_LOOP_ITERATIONS: u64 = 100_000;
+
+/// The maximum number of loop iterations across one evaluation.
+///
+/// Per-loop caps alone allow nested loops to multiply evaluator work: two
+/// independently capped loops can otherwise execute up to their product.
+/// This cumulative limit keeps one evaluation bounded even when every
+/// individual loop stays within [`MAX_LOOP_ITERATIONS`].
+const MAX_TOTAL_LOOP_ITERATIONS: u64 = 1_000_000;
 
 /// The maximum size of a single string value, measured in UTF-8 bytes.
 ///
@@ -108,6 +116,9 @@ pub struct Evaluator {
     /// Cumulative bytes of value data built so far in this evaluation,
     /// charged against [`MAX_TOTAL_VALUE_BYTES`].
     allocated_bytes: Cell<usize>,
+    /// Cumulative loop iterations executed during this evaluation, charged
+    /// against [`MAX_TOTAL_LOOP_ITERATIONS`].
+    executed_iterations: Cell<u64>,
     /// A control-flow signal executed by the innermost active construct,
     /// waiting to be consumed at that construct's boundary.
     pending_flow: RefCell<Option<Flow>>,
@@ -122,6 +133,7 @@ impl Evaluator {
             call_depth: Cell::new(0),
             resource_exhausted: Cell::new(false),
             allocated_bytes: Cell::new(0),
+            executed_iterations: Cell::new(0),
             pending_flow: RefCell::new(None),
         }
     }
@@ -181,6 +193,7 @@ impl Evaluator {
         self.call_depth.set(0);
         self.resource_exhausted.set(false);
         self.allocated_bytes.set(0);
+        self.executed_iterations.set(0);
         self.pending_flow.borrow_mut().take();
         let baseline = sink.len();
         let value = self.eval(root, source, environment, sink, 0);
@@ -711,6 +724,9 @@ impl Evaluator {
                 );
                 break;
             }
+            if !self.charge_loop_iteration(node.span, sink) {
+                break;
+            }
             let condition_value = self.eval(condition, source, environment, sink, depth + 1);
             match condition_value {
                 Value::Boolean(true) => {
@@ -834,6 +850,9 @@ impl Evaluator {
                     Diagnostic::error("loop exceeded the maximum number of iterations")
                         .at(node.span),
                 );
+                break;
+            }
+            if !self.charge_loop_iteration(node.span, sink) {
                 break;
             }
             environment.push_scope();
@@ -1670,6 +1689,28 @@ impl Evaluator {
             .at(span),
         );
         false
+    }
+
+    /// Charges one loop iteration against the evaluation's cumulative work
+    /// budget.
+    ///
+    /// The counter spans nested `while` and `for` loops. Once exhausted,
+    /// evaluation stops through the shared resource-exhaustion path so the
+    /// budget cannot be bypassed by nesting independently valid loops.
+    fn charge_loop_iteration(&self, span: Span, sink: &mut DiagnosticSink) -> bool {
+        let total = self.executed_iterations.get().saturating_add(1);
+        if total > MAX_TOTAL_LOOP_ITERATIONS {
+            self.resource_exhausted.set(true);
+            sink.emit(
+                Diagnostic::error(format!(
+                    "evaluation exceeded its total iteration budget of {MAX_TOTAL_LOOP_ITERATIONS} iterations"
+                ))
+                .at(span),
+            );
+            return false;
+        }
+        self.executed_iterations.set(total);
+        true
     }
 
     /// Charges `bytes` of newly built value data against the evaluation's
