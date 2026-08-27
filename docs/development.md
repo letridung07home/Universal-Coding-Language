@@ -16,8 +16,16 @@ Build and run the interpreter:
 ```sh
 cargo build
 cargo run -- example.ucl
+cargo run -- --list-imports -p ./lib example.ucl
 cargo build --release --locked
 ```
+
+`ucl --list-imports` resolves and prints a program's complete import graph
+without evaluating any UCL expression. It accepts the same source forms and
+module-search configuration as normal execution: a file path (including `-`
+for standard input) or `-e/--eval`, repeatable `-p/--path` directories, and
+`UCL_PATH`. Its output starts with the canonical root path followed by
+`importer -> imported` edges in deterministic depth-first source order.
 
 Run the same core checks as CI before submitting a change:
 
@@ -45,8 +53,9 @@ source text -> lexer -> parser -> evaluator
 - `evaluator/` executes the abstract syntax tree (`mod.rs` holds the core
   evaluator, `value.rs` the runtime values, `environment.rs` lexical scopes,
   and `builtins.rs` the prelude).
-- `module.rs` loads `use` imports: path resolution, cycle detection,
-  evaluation isolation, and binding merges.
+- `module.rs` owns `use` imports: path resolution, cycle detection,
+  evaluation isolation, binding merges, and the read-only resolved-import
+  traversal used by `ucl --list-imports`.
 - `render.rs` renders diagnostics with source excerpts.
 - `repl.rs` runs interactive sessions with a persistent environment.
 - `main.rs` provides the `ucl` command-line interface.

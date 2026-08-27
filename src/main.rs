@@ -8,9 +8,11 @@
 use std::env;
 use std::fs;
 use std::io::Read;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use ucl::fmt::format_source;
+use ucl::module::resolved_import_graph;
 use ucl::{DiagnosticSink, Environment, Evaluator, Lexer, Parser, SourceFile};
 
 mod render;
@@ -19,8 +21,7 @@ mod repl;
 use render::{format_value, render_diagnostics};
 
 /// Usage text printed on argument errors and `--help`.
-const USAGE: &str =
-    "usage: ucl [-p <dir>]... [-e <code> | <file>]\n       ucl fmt [--check] [<file> | -]";
+const USAGE: &str = "usage: ucl [-p <dir>]... [-e <code> | <file>] [--list-imports]\n       ucl fmt [--check] [<file> | -]";
 
 /// The environment variable holding module search directories, separated by
 /// the platform's path separator (`:` on Unix, `;` on Windows).
@@ -34,7 +35,11 @@ fn main() -> ExitCode {
         return run_fmt(&args[2..]);
     }
 
-    let (input, mut search_paths) = match parse_args(&args) {
+    let ProgramArgs {
+        input,
+        mut search_paths,
+        list_imports,
+    } = match parse_args(&args) {
         Ok(Some(parsed)) => parsed,
         // The REPL, `--help`, and `--version` handle their own output.
         Ok(None) => return ExitCode::SUCCESS,
@@ -58,7 +63,11 @@ fn main() -> ExitCode {
         }
     };
 
-    run_program(&name, contents, &search_paths)
+    if list_imports {
+        run_list_imports(&name, contents, &search_paths)
+    } else {
+        run_program(&name, contents, &search_paths)
+    }
 }
 
 /// Where the program to evaluate comes from.
@@ -69,6 +78,16 @@ enum Input {
     Stdin,
     /// Inline program text from `-e/--eval`.
     Eval(String),
+}
+
+/// The parsed arguments for program evaluation or import inspection.
+struct ProgramArgs {
+    /// The UCL source to inspect or evaluate.
+    input: Input,
+    /// Module search directories supplied explicitly on the command line.
+    search_paths: Vec<String>,
+    /// Whether to print the resolved import graph instead of evaluating source.
+    list_imports: bool,
 }
 
 /// The formatter subcommand's parsed arguments.
@@ -232,15 +251,37 @@ fn run_program(name: &str, contents: String, search_paths: &[String]) -> ExitCod
     }
 }
 
+/// Prints the root and each resolved edge in a program's import graph.
+///
+/// This command parses source and module files but deliberately never creates
+/// an evaluator or executes UCL code. That makes it safe to use for debugging
+/// import resolution in programs with side effects or expensive computation.
+fn run_list_imports(name: &str, contents: String, search_paths: &[String]) -> ExitCode {
+    let source = SourceFile::new(name, contents);
+    let mut sink = DiagnosticSink::new();
+    let paths = search_paths.iter().map(PathBuf::from).collect::<Vec<_>>();
+    let Some(graph) = resolved_import_graph(&source, &paths, &mut sink) else {
+        render_diagnostics(&sink, &source);
+        return ExitCode::FAILURE;
+    };
+
+    println!("{}", graph.root.display());
+    for edge in graph.edges {
+        println!("{} -> {}", edge.importer.display(), edge.imported.display());
+    }
+    ExitCode::SUCCESS
+}
+
 /// Interprets command-line arguments.
 ///
-/// Returns the program input together with the search directories given
-/// through `-p/--path` flags, or `None` after handling an informational flag
-/// or running the interactive session. Usage errors are returned as messages.
-fn parse_args(args: &[String]) -> Result<Option<(Input, Vec<String>)>, String> {
+/// Returns the program input, command-line search directories, and requested
+/// operation, or `None` after handling an informational flag or running the
+/// interactive session. Usage errors are returned as messages.
+fn parse_args(args: &[String]) -> Result<Option<ProgramArgs>, String> {
     let mut file = None;
     let mut eval = None;
     let mut search_paths = Vec::new();
+    let mut list_imports = false;
 
     let mut index = 1;
     while index < args.len() {
@@ -256,6 +297,9 @@ fn parse_args(args: &[String]) -> Result<Option<(Input, Vec<String>)>, String> {
                 println!("Options:");
                 println!("  -e, --eval <code> evaluate inline program text");
                 println!("  -p, --path <dir>  add a module search directory (repeatable)");
+                println!(
+                    "      --list-imports print the resolved import graph without evaluating source"
+                );
                 println!("  -h, --help        show this help");
                 println!("  -V, --version     show the version");
                 println!();
@@ -292,6 +336,12 @@ module imports also consult {SEARCH_PATH_ENV} directories \
                 search_paths.push(directory.clone());
                 index += 1;
             }
+            "--list-imports" => {
+                if list_imports {
+                    return Err("repeated `--list-imports` flag".to_owned());
+                }
+                list_imports = true;
+            }
             // `-` is the conventional placeholder for standard input and
             // must be matched before the unknown-option guard below.
             "-" => {
@@ -318,13 +368,25 @@ module imports also consult {SEARCH_PATH_ENV} directories \
     match (file, eval) {
         (Some(_), Some(_)) => Err("cannot combine `--eval` with a source file".to_owned()),
         (Some(file), None) => {
-            if file == "-" {
-                Ok(Some((Input::Stdin, search_paths)))
+            let input = if file == "-" {
+                Input::Stdin
             } else {
-                Ok(Some((Input::File(file), search_paths)))
-            }
+                Input::File(file)
+            };
+            Ok(Some(ProgramArgs {
+                input,
+                search_paths,
+                list_imports,
+            }))
         }
-        (None, Some(code)) => Ok(Some((Input::Eval(code), search_paths))),
+        (None, Some(code)) => Ok(Some(ProgramArgs {
+            input: Input::Eval(code),
+            search_paths,
+            list_imports,
+        })),
+        (None, None) if list_imports => {
+            Err("`--list-imports` requires a source file, `-`, or `--eval` program".to_owned())
+        }
         (None, None) => {
             // No input: run the interactive REPL with the same search paths.
             repl::run(&search_paths).map_or_else(

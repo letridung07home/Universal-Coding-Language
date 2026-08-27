@@ -273,6 +273,100 @@ fn search_path_flag_resolves_imports() {
 }
 
 #[test]
+fn list_imports_reports_resolved_transitive_graph_without_evaluating_source() {
+    let app = temp_dir();
+    let lib = temp_dir();
+    fs::create_dir_all(app.join("tools")).expect("create app directories");
+    fs::create_dir_all(&lib).expect("create library directory");
+    fs::write(lib.join("math.ucl"), "use \"helper\"; let ignored = 1 / 0;")
+        .expect("write math module");
+    fs::write(lib.join("helper.ucl"), "let answer = 42;").expect("write helper module");
+    fs::write(app.join("tools/format.ucl"), "let formatter = 1;").expect("write local module");
+    let main = app.join("main.ucl");
+    fs::write(
+        &main,
+        "let ignored = 1 / 0; use \"math\"; use \"tools/format\";",
+    )
+    .expect("write main source");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_ucl"))
+        .arg("--list-imports")
+        .arg("-p")
+        .arg(&lib)
+        .arg(&main)
+        .output()
+        .expect("run the ucl binary");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let root = main.canonicalize().expect("canonical main path");
+    let math = lib
+        .join("math.ucl")
+        .canonicalize()
+        .expect("canonical math path");
+    let helper = lib
+        .join("helper.ucl")
+        .canonicalize()
+        .expect("canonical helper path");
+    let formatter = app
+        .join("tools/format.ucl")
+        .canonicalize()
+        .expect("canonical formatter path");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!(
+            "{}\n{} -> {}\n{} -> {}\n{} -> {}\n",
+            root.display(),
+            root.display(),
+            math.display(),
+            math.display(),
+            helper.display(),
+            root.display(),
+            formatter.display(),
+        )
+    );
+
+    let _ = fs::remove_dir_all(app);
+    let _ = fs::remove_dir_all(lib);
+}
+
+#[test]
+fn list_imports_reports_resolution_failures_and_rejects_invalid_invocations() {
+    let app = temp_dir();
+    fs::create_dir_all(&app).expect("create app directory");
+    let main = app.join("main.ucl");
+    fs::write(&main, "use \"missing\";").expect("write main source");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_ucl"))
+        .arg("--list-imports")
+        .arg(&main)
+        .output()
+        .expect("run the ucl binary");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stdout).is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("none of these locations exist"));
+
+    let (stdout, stderr, code) = run_args(&["--list-imports"]);
+    assert_eq!(code, 2);
+    assert!(stdout.is_empty());
+    assert!(stderr.contains("`--list-imports` requires a source file"));
+
+    let (stdout, stderr, code) = run_args(&[
+        "--list-imports",
+        "--list-imports",
+        &main.display().to_string(),
+    ]);
+    assert_eq!(code, 2);
+    assert!(stdout.is_empty());
+    assert!(stderr.contains("repeated `--list-imports` flag"));
+
+    let _ = fs::remove_dir_all(app);
+}
+
+#[test]
 fn evaluates_break_and_continue_end_to_end() {
     let source = "
         let evens = 0;

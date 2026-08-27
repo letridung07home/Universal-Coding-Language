@@ -113,6 +113,13 @@ Stable across releases:
   stderr.
 - Running `ucl` with no arguments starts the interactive REPL; `--help`
   and `--version` print help and version information respectively.
+- `ucl --list-imports [--path <dir>]... <file>` is a stable, read-only
+  inspection command. It parses the root and reachable module files, prints
+  the canonical root followed by `importer -> imported` edges in deterministic
+  depth-first source order, and does not evaluate UCL code. It honors
+  `-p/--path`, `UCL_PATH`, extensionless paths, cycle detection, and lookup
+  precedence exactly as evaluated `use` statements do; malformed modules,
+  missing imports, and cycles fail with exit code `1`.
 
 ### Interactive sessions
 
