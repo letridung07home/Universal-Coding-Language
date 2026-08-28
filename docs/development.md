@@ -33,10 +33,13 @@ Run the same core checks as CI before submitting a change:
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-features
+./scripts/check-release-metadata.sh
 ```
 
-The CI workflow runs formatting, linting, tests, a warning-free documentation
-build, a fuzz-target compilation check, and a locked release build.
+The CI workflow runs formatting, linting, tests, the release-metadata audit, a
+warning-free documentation build, a fuzz-target compilation check, and a locked
+release build. The metadata audit verifies that the Cargo version, both
+workspace lockfiles, changelog, and final-v1 documentation remain synchronized.
 
 ## Project architecture
 
@@ -106,6 +109,21 @@ When changing behavior:
 
 Language changes must update `docs/spec.md` in the same pull request so the
 implementation and specification remain synchronized.
+
+## Release boundary
+
+UCL `1.19.0` is the final stable v1 release. The v1 language, command-line
+interface, public library API, diagnostics, formatter, module resolution, and
+resource safeguards remain governed by [`guarantees.md`](guarantees.md). Any
+change that breaks those promises belongs in the explicitly breaking, still
+draft [v2.0.0 static-type-checking plan](v2-goal.md), rather than a v1 patch or
+minor release.
+
+Before publishing a v1 release candidate, run
+`./scripts/check-release-metadata.sh` after updating `Cargo.toml`; update both
+workspace lockfiles with Cargo rather than editing them manually. The script is
+intentionally part of CI so a tag-triggered release cannot package mismatched
+version metadata.
 
 ## Licensing contributions
 

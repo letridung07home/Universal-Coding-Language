@@ -7,10 +7,11 @@ provides an interpreter with a lexer, parser, evaluator, file-based modules,
 an interactive REPL, a command-line interface, and source-aware diagnostics.
 
 > [!NOTE]
-> UCL 1.18 follows the first stable release: the language, CLI, library API, and
-> error categories are covered by [compatibility guarantees](docs/guarantees.md).
+> UCL 1.19.0 is the final stable v1 release: the language, CLI, library API,
+> and error categories are covered by [compatibility guarantees](docs/guarantees.md).
 > It remains a deliberately small language — not a batteries-included
-> general-purpose scripting environment.
+> general-purpose scripting environment. The planned, explicitly breaking v2
+> direction is [optional static type checking](docs/v2-goal.md).
 
 ## Features
 
@@ -212,9 +213,12 @@ programs quickly, makes list accumulation through assignment linear in total
 work, and raises the fuzz workflow's per-run timeout to 60 seconds; UCL 1.16
 extends that budget to cover every value-copying built-in and list
 concatenation, and preserves fuzz artifacts when a nightly run fails; UCL
-1.17 adds a cumulative loop-iteration budget; and UCL 1.18 adds a read-only
-resolved import graph through `ucl --list-imports`. Future directions are
-sketched in the [project roadmap](docs/roadmap.md).
+1.17 adds a cumulative loop-iteration budget; UCL 1.18 adds a read-only
+resolved import graph through `ucl --list-imports`; and UCL 1.19 completes the
+stable v1 line with a compatibility audit and automated release-metadata gate.
+The next direction is the draft, explicitly breaking [v2.0.0 goal for optional
+static type checking](docs/v2-goal.md); future milestones are tracked in the
+[project roadmap](docs/roadmap.md).
 
 ## Contributing
 

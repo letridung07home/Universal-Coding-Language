@@ -2,6 +2,28 @@
 
 All notable changes to UCL are documented here.
 
+## 1.19.0 - 2026-08-28
+
+### Internal
+
+- Added `scripts/check-release-metadata.sh` and a matching CI gate. The audit
+  verifies that the Cargo manifest and both workspace lockfiles agree on the
+  release version,
+  that the README, compatibility contract, roadmap, and v1 release plan record
+  that version, and that a v1 release entry does not introduce a
+  `Breaking` heading.
+
+### Documented
+
+- Completed the final v1 compatibility and specification audit. The stable
+  language, public library API, command-line interface, formatter, module
+  resolution, diagnostics, and deterministic evaluator safeguards remain
+  unchanged for `1.19.0`.
+- Marked `1.19.0` as the final v1 capstone across the project documentation and
+  linked the draft `v2.0.0` static-type-checking direction as the next major,
+  explicitly breaking release. No language, runtime, CLI, or public API
+  behavior changes in this release.
+
 ## 1.18.0 - 2026-08-28
 
 ### Added

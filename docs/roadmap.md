@@ -60,9 +60,10 @@ than scheduled:
 - [x] A richer module story beyond local files: extensionless imports and
       configurable search directories (`-p/--path`, `UCL_PATH`)
 
-Every item on this roadmap is complete as of UCL 1.14. Future work starts
-from a blank page; the language, CLI, library API, and error categories remain covered by
-the compatibility guarantees.
+Every planned v1 item on this roadmap is complete as of UCL 1.19.0, the final
+stable v1 release. The language, CLI, library API, and error categories remain
+covered by the [compatibility guarantees](guarantees.md); the next direction is
+the draft, explicitly breaking [v2.0.0 static-type-checking goal](v2-goal.md).
 
 ## Beyond 1.7
 
@@ -124,13 +125,17 @@ Refactor work tracked for future releases; none changes language behavior:
   `use` graph without evaluating source, mirrors module path precedence and
   extensionless lookup, and is available from both `ucl --list-imports` and
   the public `ucl::module` API (UCL 1.18.0)
+- [x] Final v1 compatibility and documentation audit, backed by a release
+  metadata check that confirms the manifest, lockfile, release notes, and
+  stable-contract references remain aligned (UCL 1.19.0)
 
 ### Release pipeline status
 
-- **UCL 1.18.0** is prepared for release. The most recent successful release,
-  `v1.17.2`, produced the Linux x86_64, macOS (Apple Silicon and Intel), and
-  Windows x86_64 artifacts and their combined checksum manifest through
-  `.github/workflows/release.yml`.
+- **UCL 1.19.0** is the final v1 release. Its tag-driven workflow builds Linux
+  x86_64, macOS (Apple Silicon and Intel), and Windows x86_64 artifacts and
+  publishes their combined `sha256sums.txt` manifest. The metadata gate runs
+  before the release build to keep versioned documentation and Cargo metadata
+  synchronized.
 - The scheduled Fuzz workflow previously reported failures on 2026-08-26 and
   2026-08-27. UCL 1.17.2 added a cumulative loop-iteration budget to cover the
   reported nested-loop family, and the subsequent manually triggered fuzz run

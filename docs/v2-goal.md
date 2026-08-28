@@ -10,17 +10,17 @@
 
 UCL `v2.0.0` introduces **optional static type annotations** and **compile-time type checking**, replacing the purely dynamic runtime type policy that has been guaranteed since `v1.0`.
 
-Programs written without annotations continue to compile and evaluate with the same semantics as `v1.16.1`, but any program that relies on runtime-only type validation (e.g., passing an integer where a string is expected and catching it at evaluation time rather than at compile time) will now fail at parse or compile time when annotations are present. This is a deliberate break: the compatibility guarantee that *"programs that evaluate successfully in one release continue to evaluate with the same result in later releases"* is lifted in favor of a stronger contract: *"programs that type-check successfully evaluate with the same result; programs that fail type-checking are rejected before evaluation."*
+Programs written without annotations continue to compile and evaluate with the same semantics as `v1.19.0`, but any program that relies on runtime-only type validation (e.g., passing an integer where a string is expected and catching it at evaluation time rather than at compile time) will now fail at parse or compile time when annotations are present. This is a deliberate break: the compatibility guarantee that *"programs that evaluate successfully in one release continue to evaluate with the same result in later releases"* is lifted in favor of a stronger contract: *"programs that type-check successfully evaluate with the same result; programs that fail type-checking are rejected before evaluation."*
 
 ---
 
 ## Why this requires v2.0.0
 
-Per `docs/guarantees.md` (`v1.16.1`):
+Per the final v1 `docs/guarantees.md` contract:
 
 > *"UCL uses semantic versioning. Breaking changes ship only in major versions; every breaking change is listed under a **Breaking** heading in the changelog entry for the release that introduces it."*
 
-`v1.16.1` has zero `Breaking` headings (`CHANGELOG.md`). A `v2.0.0` must declare at least one. Static type checking creates multiple declared breaks:
+No stable `v1.x` release has a `Breaking` heading (`CHANGELOG.md`). A `v2.0.0` must declare at least one. Static type checking creates multiple declared breaks:
 
 ### Declared breaks (`CHANGELOG.md` must list these)
 
@@ -114,8 +114,8 @@ Starting from `v2.0.0`:
 
 ## References
 
-- `docs/guarantees.md` — current compatibility contract (`v1.16.1`)
-- `docs/roadmap.md` — completed milestones; static typing noted as future direction (`v0.4.0` era, still unresolved in `v1.16.1`)
+- `docs/guarantees.md` — final v1 compatibility contract (`v1.19.0`)
+- `docs/roadmap.md` — completed v1 milestones and the transition to v2
 - `docs/spec.md` §3 — current dynamic typing definition
-- `CHANGELOG.md` — zero breaking changes since `1.0.0`
-- `Cargo.toml` — `version = "1.16.1"`
+- `CHANGELOG.md` — no breaking changes in stable `1.x` releases
+- `Cargo.toml` — `version = "1.19.0"`

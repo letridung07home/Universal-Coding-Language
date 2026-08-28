@@ -38,6 +38,9 @@ jobs:
       - name: Run tests
         run: cargo test --all-features
 
+      - name: Check release metadata
+        run: ./scripts/check-release-metadata.sh
+
       - name: Check documentation builds without warnings
         run: cargo doc --no-deps --locked
         env:

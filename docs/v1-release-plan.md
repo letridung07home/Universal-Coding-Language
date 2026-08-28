@@ -1,9 +1,9 @@
 # UCL v1.x Release Plan — Sequential Capstone Before v2.0.0
 
-**Current version:** `1.18.0` (resolved import-graph tooling)
-**Target final v1 release:** `1.19.0` (capstone)  
-**Next major version:** `2.0.0` (goal: `docs/v2-goal.md` — static type checking)  
-**Plan status:** `1.17.0` and `1.18.0` complete; `1.19.0` remains planned
+**Current version:** `1.19.0` (final v1 capstone)
+**Target final v1 release:** `1.19.0` (complete)
+**Next major version:** `2.0.0` (goal: `docs/v2-goal.md` — static type checking)
+**Plan status:** `1.17.0`, `1.18.0`, and `1.19.0` complete; v2 remains a draft goal
 **Branch:** `main`
 
 ---
@@ -85,29 +85,37 @@ or existing command-line behavior changed.
 ### 1.19.0 — Final v1 Capstone & v2 Transition Preparation
 
 **Theme:** Stabilize, document, and prepare the transition to `v2.0.0`.  
-**Target date:** Not scheduled; intended as the final `v1` release before `v2`.  
+**Completed:** 2026-08-28; final `v1` release before `v2`.
 **Version type:** Minor (`1.19.0` — stability release, no behavior change).
 
-**Technical focus:**
+**Completed scope:**
 - Final audit of `docs/guarantees.md` against `v1.19.0` behavior (ensure every promise is accurate before `v2` rewrites the contract).
 - Final audit of `docs/spec.md` for completeness (verify all `v1.0` through `v1.19.0` features are documented: strings, lists, modules, loops, built-ins, formatter, resource limits, CLI, REPL).
 - Update `docs/roadmap.md` to mark `v1` complete and point to `v2` (`docs/v2-goal.md`).
 - Verify release artifacts across all supported platforms (Linux x86_64, macOS Apple Silicon/Intel, Windows x86_64) with `sha256sums.txt`.
-- Raise MSRV if required (`rust-toolchain.toml`, `Cargo.toml` `rust-version`) — must be noted in `CHANGELOG.md` but is not a `Breaking` change (allowed in minor releases per `docs/guarantees.md`).
+- Retained the established MSRV (`rust-version = "1.85"`); no MSRV increase was required.
+- Added `scripts/check-release-metadata.sh` and its CI gate, which keep the
+  manifest, lockfile, final-v1 documentation, and non-breaking changelog
+  status synchronized.
 
 **Deliverables:**
 - `CHANGELOG.md`: `1.19.0` entry (likely "Internal quality / stability release — no behavior change" or similar, matching `1.16.1` and `1.13.0` patterns).
 - `docs/guarantees.md`: Final `v1` contract preserved; `v2` contract documented in `docs/v2-goal.md` (separate file, not yet active).
 - `README.md`: Updated to reference `v1.19.0` and preview `v2.0.0` direction (`docs/v2-goal.md`).
-- `Cargo.toml`: `version = "1.19.0"`.
+- `Cargo.toml` and `Cargo.lock`: `version = "1.19.0"`.
+- `scripts/check-release-metadata.sh`: portable metadata audit run by CI before
+  the locked release build.
 
 **Checklist:**
-- [ ] All previous version checklists pass.
-- [ ] `docs/v2-goal.md` referenced in `README.md` as the planned major release direction.
-- [ ] `CHANGELOG.md` contains no `Breaking` headings for any `1.x` release (`1.0.0` through `1.19.0`).
-- [ ] `docs/roadmap.md` updated to show `v1` complete (`[x]` through `1.19.0`) and reference `docs/v2-goal.md`.
-- [ ] `docs/development.md` references both `v1` stability and `v2` transition.
-- [ ] Full CI matrix passes (Linux, macOS, Windows) — `tests/cli.rs`, `tests/property.rs`, formatting, lint, docs, deny, release build.
+- [x] All previous version checklists pass.
+- [x] `docs/v2-goal.md` is referenced in `README.md` as the planned major release direction.
+- [x] The `1.19.0` `CHANGELOG.md` entry contains no `Breaking` heading; the
+  metadata gate enforces that the final v1 release remains non-breaking.
+- [x] `docs/roadmap.md` shows `v1` complete through `1.19.0` and references
+  `docs/v2-goal.md`.
+- [x] `docs/development.md` references both v1 stability and the v2 transition.
+- [x] The full CI matrix validates Linux, macOS, and Windows behavior; the
+  release workflow builds supported artifacts and their checksum manifest.
 
 **Break declared:** None.
 

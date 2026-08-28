@@ -2,8 +2,9 @@
 
 This document describes what the UCL project promises to keep stable across
 releases, and what may change. It applies to the language, the `ucl` command
-line interface, and the Rust library crate. These guarantees apply in full as
-of version 1.2.0.
+line interface, and the Rust library crate. These guarantees apply in full to
+the final v1 release, version 1.19.0; the planned v2 contract is intentionally
+separate in [`v2-goal.md`](v2-goal.md).
 
 ## Versioning policy
 
