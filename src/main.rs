@@ -197,9 +197,7 @@ fn check_source_file(path: &Path, contents: String, strict_types: bool) -> bool 
 fn print_check_help() {
     println!("usage: ucl check [-p <dir>]... [--strict-types] <file>...");
     println!();
-    println!(
-        "Parse and statically check one or more UCL entry files without evaluation."
-    );
+    println!("Parse and statically check one or more UCL entry files without evaluation.");
     println!("Imported modules are resolved and checked too, but never executed.");
     println!();
     println!("Options:");
