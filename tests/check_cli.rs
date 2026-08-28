@@ -63,7 +63,10 @@ fn reports_type_errors_in_any_entry_file() {
     let _ = fs::remove_dir_all(&dir);
     assert_eq!(code, 1);
     assert!(stdout.is_empty());
-    assert!(stderr.contains("initializer expects `int`"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("initializer expects `int`"),
+        "stderr: {stderr}"
+    );
     assert!(stderr.contains("bad.ucl"), "stderr: {stderr}");
 }
 
@@ -98,7 +101,10 @@ fn checks_imported_modules_without_running_them() {
     let _ = fs::remove_dir_all(&dir);
     assert_eq!(code, 1);
     assert!(stdout.is_empty());
-    assert!(stderr.contains("initializer expects `int`"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("initializer expects `int`"),
+        "stderr: {stderr}"
+    );
     assert!(stderr.contains("module.ucl"), "stderr: {stderr}");
 }
 
