@@ -109,6 +109,14 @@ fn checks_imported_modules_without_running_them() {
 }
 
 #[test]
+fn check_help_is_successful() {
+    let (stdout, stderr, code) = run(&["check", "--help"]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert!(stdout.contains("usage: ucl check"));
+    assert!(stderr.is_empty());
+}
+
+#[test]
 fn check_requires_at_least_one_file() {
     let (stdout, stderr, code) = run(&["check"]);
     assert_eq!(code, 2);
