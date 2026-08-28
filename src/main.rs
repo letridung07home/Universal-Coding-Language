@@ -1,14 +1,15 @@
 //! Command-line entry point for the `ucl` binary.
 //!
 //! This module provides the CLI interface for evaluating UCL source files,
-//! inline programs (`-e/--eval`), and piped stdin, as well as interactive
-//! sessions. It orchestrates the compiler pipeline
+//! inline programs (`-e/--eval`), piped stdin, batch static checking, and
+//! interactive sessions. It orchestrates the compiler pipeline
 //! (lexer → parser → evaluator) and handles diagnostic formatting and output.
 
+use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use ucl::fmt::format_source;
@@ -21,7 +22,7 @@ mod repl;
 use render::{format_value, render_diagnostics};
 
 /// Usage text printed on argument errors and `--help`.
-const USAGE: &str = "usage: ucl [-p <dir>]... [-e <code> | <file>] [--list-imports | --type-check] [--strict-types]\n       ucl fmt [--check] [<file> | -]";
+const USAGE: &str = "usage: ucl [-p <dir>]... [-e <code> | <file>] [--list-imports | --type-check] [--strict-types]\n       ucl check [-p <dir>]... [--strict-types] <file>...\n       ucl fmt [--check] [<file> | -]";
 
 /// The environment variable holding module search directories, separated by
 /// the platform's path separator (`:` on Unix, `;` on Windows).
@@ -30,9 +31,11 @@ const SEARCH_PATH_ENV: &str = "UCL_PATH";
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
 
-    // The formatter is a subcommand: `ucl fmt ...`.
     if args.get(1).map(String::as_str) == Some("fmt") {
         return run_fmt(&args[2..]);
+    }
+    if args.get(1).map(String::as_str) == Some("check") {
+        return run_check(&args[2..]);
     }
 
     let ProgramArgs {
@@ -43,7 +46,6 @@ fn main() -> ExitCode {
         strict_types,
     } = match parse_args(&args) {
         Ok(Some(parsed)) => parsed,
-        // The REPL, `--help`, and `--version` handle their own output.
         Ok(None) => return ExitCode::SUCCESS,
         Err(message) => {
             eprintln!("error: {message}");
@@ -51,11 +53,7 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    // `-p/--path` flags are consulted before any `UCL_PATH` directories:
-    // explicit flags are the more specific configuration.
-    for dir in env_search_paths() {
-        search_paths.push(dir);
-    }
+    search_paths.extend(env_search_paths());
 
     let (name, contents) = match read_input(&input) {
         Ok(parts) => parts,
@@ -72,42 +70,177 @@ fn main() -> ExitCode {
     }
 }
 
-/// Where the program to evaluate comes from.
+/// Where program input comes from.
 enum Input {
-    /// A source file path.
     File(String),
-    /// The program text piped to standard input (`ucl -`).
     Stdin,
-    /// Inline program text from `-e/--eval`.
     Eval(String),
 }
 
-/// The parsed arguments for program evaluation or import inspection.
+/// Parsed arguments for ordinary program evaluation or inspection.
 struct ProgramArgs {
-    /// The UCL source to inspect or evaluate.
     input: Input,
-    /// Module search directories supplied explicitly on the command line.
     search_paths: Vec<String>,
-    /// Whether to print the resolved import graph instead of evaluating source.
     list_imports: bool,
-    /// Whether to run static checking only, without evaluating source.
     type_check: bool,
-    /// Whether to require complete function signatures before evaluation.
     strict_types: bool,
 }
 
-/// The formatter subcommand's parsed arguments.
+/// Parsed arguments for `ucl fmt`.
 struct FmtArgs {
     check: bool,
     input: Option<Input>,
 }
 
-/// Runs `ucl fmt`: format a file in place, pipe stdin to stdout, or check
-/// formatting without rewriting.
+/// Parsed arguments for `ucl check`.
+struct CheckArgs {
+    files: Vec<String>,
+    search_paths: Vec<String>,
+    strict_types: bool,
+}
+
+/// Runs `ucl check` over one or more entry files without evaluating source.
 ///
-/// Exit codes: 0 when the output is formatted (or rewritten), 1 when
-/// `--check` finds unformatted input or the source has errors, and 2 for
-/// usage and I/O problems. Files with errors are never touched.
+/// The command first resolves each complete import graph, then lexes, parses,
+/// and type-checks every unique source file in that graph. This makes the
+/// command suitable for CI and editor workflows: imported code is validated
+/// but never executed. Exit code 0 means every file checked successfully, 1
+/// reports source/type errors, and 2 reports usage or input errors.
+fn run_check(args: &[String]) -> ExitCode {
+    let parsed = match parse_check_args(args) {
+        Ok(parsed) => parsed,
+        Err(message) => {
+            eprintln!("error: {message}");
+            eprintln!("{USAGE}");
+            return ExitCode::from(2);
+        }
+    };
+
+    let mut search_paths = parsed.search_paths;
+    search_paths.extend(env_search_paths());
+    let path_bufs = search_paths.iter().map(PathBuf::from).collect::<Vec<_>>();
+    let mut checked = HashSet::new();
+    let mut failed = false;
+
+    for file in parsed.files {
+        let contents = match fs::read_to_string(&file) {
+            Ok(contents) => contents,
+            Err(error) => {
+                eprintln!("error: cannot read `{file}`: {error}");
+                return ExitCode::from(2);
+            }
+        };
+        let root_source = SourceFile::new(&file, contents);
+        let mut graph_sink = DiagnosticSink::new();
+        let Some(graph) = resolved_import_graph(&root_source, &path_bufs, &mut graph_sink) else {
+            render_diagnostics(&graph_sink, &root_source);
+            failed = true;
+            continue;
+        };
+
+        let mut paths = Vec::with_capacity(graph.edges.len() + 1);
+        paths.push(graph.root);
+        for edge in graph.edges {
+            paths.push(edge.imported);
+        }
+
+        for path in paths {
+            let canonical = path.canonicalize().unwrap_or(path);
+            if !checked.insert(canonical.clone()) {
+                continue;
+            }
+            let source_contents = match fs::read_to_string(&canonical) {
+                Ok(contents) => contents,
+                Err(error) => {
+                    eprintln!("error: cannot read `{}`: {error}", canonical.display());
+                    return ExitCode::from(2);
+                }
+            };
+            if !check_source_file(&canonical, source_contents, parsed.strict_types) {
+                failed = true;
+            }
+        }
+    }
+
+    if failed {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+/// Checks one source file without evaluating it.
+fn check_source_file(path: &Path, contents: String, strict_types: bool) -> bool {
+    let name = path.display().to_string();
+    let source = SourceFile::new(&name, contents);
+    let mut sink = DiagnosticSink::new();
+    let tokens = Lexer::new(&source).tokenize(&mut sink);
+    let mut success = false;
+    if !sink.has_errors()
+        && let Some(ast) = Parser::new(tokens).parse(&mut sink)
+        && !sink.has_errors()
+    {
+        let evaluator = Evaluator::new();
+        let mut context = ucl::TypeContext::new();
+        success = evaluator.type_check(&ast, &source, &mut context, &mut sink, strict_types);
+    }
+    render_diagnostics(&sink, &source);
+    success && !sink.has_errors()
+}
+
+/// Parses `ucl check` arguments.
+fn parse_check_args(args: &[String]) -> Result<CheckArgs, String> {
+    let mut files = Vec::new();
+    let mut search_paths = Vec::new();
+    let mut strict_types = false;
+    let mut index = 0;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "-p" | "--path" => {
+                let flag = args[index].clone();
+                index += 1;
+                let Some(directory) = args.get(index) else {
+                    return Err(format!("`{flag}` requires a directory argument"));
+                };
+                search_paths.push(directory.clone());
+            }
+            "--strict-types" => {
+                if strict_types {
+                    return Err("repeated `--strict-types` flag".to_owned());
+                }
+                strict_types = true;
+            }
+            "-h" | "--help" => {
+                println!("usage: ucl check [-p <dir>]... [--strict-types] <file>...");
+                println!();
+                println!("Parse and statically check one or more UCL entry files without evaluation.");
+                println!("Imported modules are resolved and checked too, but never executed.");
+                println!();
+                println!("Options:");
+                println!("  -p, --path <dir>  add a module search directory (repeatable)");
+                println!("      --strict-types require complete function annotations");
+                println!("  -h, --help        show this help");
+                return Err(String::new());
+            }
+            flag if flag.starts_with('-') => return Err(format!("unknown option `{flag}`")),
+            file => files.push(file.to_owned()),
+        }
+        index += 1;
+    }
+
+    if files.is_empty() {
+        return Err("`ucl check` expects at least one source file".to_owned());
+    }
+
+    Ok(CheckArgs {
+        files,
+        search_paths,
+        strict_types,
+    })
+}
+
+/// Runs `ucl fmt`.
 fn run_fmt(args: &[String]) -> ExitCode {
     let Some(parsed) = parse_fmt_args(args) else {
         return ExitCode::from(2);
@@ -143,9 +276,7 @@ fn run_fmt(args: &[String]) -> ExitCode {
                         return ExitCode::from(2);
                     }
                 }
-                Input::Eval(_) => {
-                    unreachable!("`ucl fmt` never accepts inline programs");
-                }
+                Input::Eval(_) => unreachable!("`ucl fmt` never accepts inline programs"),
             }
             ExitCode::SUCCESS
         }
@@ -157,8 +288,7 @@ fn run_fmt(args: &[String]) -> ExitCode {
     }
 }
 
-/// Interprets `ucl fmt` arguments: an optional `--check` flag plus one
-/// optional source (a file path or `-`).
+/// Parses formatter arguments.
 fn parse_fmt_args(args: &[String]) -> Option<FmtArgs> {
     let mut parsed = FmtArgs {
         check: false,
@@ -198,9 +328,7 @@ fn parse_fmt_args(args: &[String]) -> Option<FmtArgs> {
     Some(parsed)
 }
 
-/// Reads the program text for `input`, returning its display name and
-/// contents. File names stay as given so relative imports resolve against
-/// the file's directory; `-` reads standard input under the name `<stdin>`.
+/// Reads source text for one input.
 fn read_input(input: &Input) -> Result<(String, String), String> {
     match input {
         Input::File(file) => {
@@ -219,13 +347,7 @@ fn read_input(input: &Input) -> Result<(String, String), String> {
     }
 }
 
-/// Runs the compiler pipeline over `contents`: source text → tokens → AST →
-/// value.
-///
-/// Each stage runs only if every earlier stage succeeded, so a program with
-/// lexical errors is never parsed and one with syntax errors is never
-/// evaluated. This keeps diagnostics focused on the root cause instead of
-/// cascading through downstream stages fed garbage input.
+/// Runs the compiler pipeline over one program.
 fn run_program(
     name: &str,
     contents: String,
@@ -273,11 +395,7 @@ fn run_program(
     }
 }
 
-/// Prints the root and each resolved edge in a program's import graph.
-///
-/// This command parses source and module files but deliberately never creates
-/// an evaluator or executes UCL code. That makes it safe to use for debugging
-/// import resolution in programs with side effects or expensive computation.
+/// Prints one program's resolved import graph.
 fn run_list_imports(name: &str, contents: String, search_paths: &[String]) -> ExitCode {
     let source = SourceFile::new(name, contents);
     let mut sink = DiagnosticSink::new();
@@ -294,11 +412,7 @@ fn run_list_imports(name: &str, contents: String, search_paths: &[String]) -> Ex
     ExitCode::SUCCESS
 }
 
-/// Interprets command-line arguments.
-///
-/// Returns the program input, command-line search directories, and requested
-/// operation, or `None` after handling an informational flag or running the
-/// interactive session. Usage errors are returned as messages.
+/// Parses ordinary CLI arguments.
 fn parse_args(args: &[String]) -> Result<Option<ProgramArgs>, String> {
     let mut file = None;
     let mut eval = None;
@@ -321,15 +435,15 @@ fn parse_args(args: &[String]) -> Result<Option<ProgramArgs>, String> {
                 println!("Options:");
                 println!("  -e, --eval <code> evaluate inline program text");
                 println!("  -p, --path <dir>  add a module search directory (repeatable)");
-                println!(
-                    "      --list-imports print the resolved import graph without evaluating source"
-                );
+                println!("      --list-imports print the resolved import graph without evaluating source");
                 println!("      --type-check   check static types without evaluating source");
-                println!(
-                    "      --strict-types require annotated function signatures and check before evaluation"
-                );
+                println!("      --strict-types require annotated function signatures and check before evaluation");
                 println!("  -h, --help        show this help");
                 println!("  -V, --version     show the version");
+                println!();
+                println!("Batch checker:");
+                println!("  ucl check [-p <dir>]... [--strict-types] <file>...");
+                println!("      check entry files and their imports without evaluation");
                 println!();
                 println!("Formatter:");
                 println!("  ucl fmt [--check] [<file> | -]");
@@ -337,9 +451,7 @@ fn parse_args(args: &[String]) -> Result<Option<ProgramArgs>, String> {
                 println!("      `--check` exits 1 when the input is not formatted");
                 println!();
                 println!(
-                    "A file name of `-` reads the program from standard input; \
-module imports also consult {SEARCH_PATH_ENV} directories \
-(see https://github.com/letridung07home/Universal-Coding-Language)."
+                    "A file name of `-` reads the program from standard input; module imports also consult {SEARCH_PATH_ENV} directories (see https://github.com/letridung07home/Universal-Coding-Language)."
                 );
                 return Ok(None);
             }
@@ -382,8 +494,6 @@ module imports also consult {SEARCH_PATH_ENV} directories \
                 }
                 strict_types = true;
             }
-            // `-` is the conventional placeholder for standard input and
-            // must be matched before the unknown-option guard below.
             "-" => {
                 if file.is_some() {
                     return Err("expected a single source file".to_owned());
@@ -393,9 +503,7 @@ module imports also consult {SEARCH_PATH_ENV} directories \
                 }
                 file = Some("-".to_owned());
             }
-            flag if flag.starts_with('-') => {
-                return Err(format!("unknown option `{flag}`"));
-            }
+            flag if flag.starts_with('-') => return Err(format!("unknown option `{flag}`")),
             path => {
                 if file.is_some() {
                     return Err("expected a single source file".to_owned());
@@ -411,11 +519,7 @@ module imports also consult {SEARCH_PATH_ENV} directories \
             Err("cannot combine `--list-imports` with type-checking flags".to_owned())
         }
         (Some(file), None) => {
-            let input = if file == "-" {
-                Input::Stdin
-            } else {
-                Input::File(file)
-            };
+            let input = if file == "-" { Input::Stdin } else { Input::File(file) };
             Ok(Some(ProgramArgs {
                 input,
                 search_paths,
@@ -434,20 +538,14 @@ module imports also consult {SEARCH_PATH_ENV} directories \
         (None, None) if list_imports => {
             Err("`--list-imports` requires a source file, `-`, or `--eval` program".to_owned())
         }
-        (None, None) => {
-            // No input: run the interactive REPL with the same search paths.
-            repl::run(&search_paths).map_or_else(
-                |error| Err(format!("interactive session failed: {error}")),
-                |_| Ok(None),
-            )
-        }
+        (None, None) => repl::run(&search_paths).map_or_else(
+            |error| Err(format!("interactive session failed: {error}")),
+            |_| Ok(None),
+        ),
     }
 }
 
 /// Reads `UCL_PATH`, splitting it on the platform's path separator.
-///
-/// Missing variables and empty entries are skipped; relative entries stay
-/// relative and resolve against the process working directory.
 fn env_search_paths() -> Vec<String> {
     env::var_os(SEARCH_PATH_ENV)
         .map(|value| {
