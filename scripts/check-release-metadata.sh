@@ -53,9 +53,14 @@ if [ "$major" = "1" ]; then
     grep -F "Current version:** \`$version\`" docs/v1-release-plan.md >/dev/null || fail "v1 release plan is not updated to $version"
     grep -F "UCL $version" docs/roadmap.md >/dev/null || fail "roadmap.md does not record UCL $version"
 elif [ "$major" = "2" ]; then
-    printf '%s\n' "$release_notes" | grep -E '^#{2,6}[[:space:]]+Breaking([[:space:]]|$)' >/dev/null || fail "the $version changelog entry must declare breaking changes"
+    # v2.0.0 established the major-version compatibility break. Subsequent
+    # patch releases must not be forced to invent a Breaking section merely to
+    # satisfy metadata validation.
+    if [ "$version" = "2.0.0" ]; then
+        printf '%s\n' "$release_notes" | grep -E '^#{2,6}[[:space:]]+Breaking([[:space:]]|$)' >/dev/null || fail "the $version changelog entry must declare breaking changes"
+    fi
     grep -F "\`$version\`" docs/guarantees.md >/dev/null || fail "guarantees.md does not identify version $version"
-    grep -F "Released version:** \`$version\`" docs/v2-goal.md >/dev/null || fail "v2 goal is not finalized for $version"
+    grep -F "Current v2 release:** \`$version\`" docs/v2-goal.md >/dev/null || fail "v2 goal does not record $version as the current v2 release"
     grep -F "UCL $version" docs/roadmap.md >/dev/null || fail "roadmap.md does not record UCL $version"
 fi
 

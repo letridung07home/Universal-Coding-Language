@@ -1,9 +1,9 @@
 # UCL v2 Compatibility Guarantees
 
-**Active version:** `2.0.0`
+**Active version:** `2.0.1`
 
 This document describes the UCL project’s stability commitments from version
-`2.0.0` onward. It covers the language, the `ucl` command-line program, and the
+`2.0.0` onward, with `2.0.1` as the current patch release. It covers the language, the `ucl` command-line program, and the
 Rust library crate. The final v1 contract is preserved unchanged in
 [`v1-guarantees.md`](v1-guarantees.md).
 

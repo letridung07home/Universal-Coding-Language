@@ -115,8 +115,8 @@ implementation and specification remain synchronized.
 
 ## Release boundary
 
-UCL `2.0.0` is the active major release. Its optional annotation syntax,
-static-checking behavior, public typing API, CLI modes, formatter behavior,
+UCL `2.0.1` is the active v2 maintenance release. Its optional annotation
+syntax, static-checking behavior, public typing API, CLI modes, formatter behavior,
 module resolution, and resource safeguards are governed by
 [`guarantees.md`](guarantees.md). The final v1 contract is retained in
 [`v1-guarantees.md`](v1-guarantees.md) for historical compatibility review.

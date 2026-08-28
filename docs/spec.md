@@ -1,6 +1,6 @@
 # Universal Coding Language (UCL) — Language Specification
 
-> **Status:** stable as of version 2.0.0. This document specifies the language
+> **Status:** stable as of version 2.0.1. This document specifies the language
 > implemented by the compiler pipeline (lexer → parser → optional type checker
 > → evaluator) and is the normative definition of that language.
 

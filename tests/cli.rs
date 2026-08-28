@@ -1019,6 +1019,30 @@ fn type_check_mode_reports_annotated_mismatches_before_evaluation() {
 }
 
 #[test]
+fn type_checking_honors_user_bindings_that_shadow_builtins() {
+    for (program, expected) in [
+        (
+            "fn upper(value: int): int { value + 1; }; let result: int = upper(41); result;",
+            "42\n",
+        ),
+        (
+            "let upper: function = fn(value) { value + 1; }; let result: int = upper(41); result;",
+            "42\n",
+        ),
+    ] {
+        let (stdout, stderr, code) = run_args(&["--type-check", "-e", program]);
+        assert_eq!(code, 0, "stderr: {stderr}; program: {program}");
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+
+        let (stdout, stderr, code) = run_args(&["-e", program]);
+        assert_eq!(code, 0, "stderr: {stderr}; program: {program}");
+        assert_eq!(stdout, expected, "program: {program}");
+        assert!(stderr.is_empty());
+    }
+}
+
+#[test]
 fn strict_types_requires_function_signatures_and_evaluates_valid_programs() {
     let (stdout, stderr, code) = run_args(&["--strict-types", "-e", "fn id(x) { x; }; id(1);"]);
     assert_eq!(code, 1);

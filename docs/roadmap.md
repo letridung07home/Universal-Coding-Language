@@ -131,11 +131,14 @@ Refactor work tracked for future releases; none changes language behavior:
 
 ### Release pipeline status
 
-- **UCL 2.0.0** is the first v2 release. Its tag-driven workflow builds Linux
-  x86_64, macOS (Apple Silicon and Intel), and Windows x86_64 artifacts and
-  publishes their combined `sha256sums.txt` manifest. The metadata gate runs
-  before the release build to keep Cargo metadata, lockfiles, release notes,
-  and the active compatibility contract synchronized.
+- **UCL 2.0.1** is the current maintenance release following the first v2
+  release. It restores static type checking for user bindings that shadow
+  built-in names, preserving the runtime’s lexical name-resolution semantics.
+  Its tag-driven workflow builds Linux x86_64, macOS (Apple Silicon and Intel),
+  and Windows x86_64 artifacts and publishes their combined `sha256sums.txt`
+  manifest. The metadata gate runs before the release build to keep Cargo
+  metadata, lockfiles, release notes, and the active compatibility contract
+  synchronized.
 - The scheduled Fuzz workflow previously reported failures on 2026-08-26 and
   2026-08-27. UCL 1.17.2 added a cumulative loop-iteration budget to cover the
   reported nested-loop family, and the subsequent manually triggered fuzz run

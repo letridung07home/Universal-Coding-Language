@@ -1,12 +1,13 @@
 # UCL v2.0.0: Optional Static Type Checking
 
-**Released version:** `2.0.0`
-**Status:** Implemented release candidate
-**Branch:** `release/v2.0.0`
+**Initial release:** `2.0.0`
+**Current v2 release:** `2.0.1`
+**Status:** Implemented and maintained
+**Branch:** `main`
 
 ## Release goal
 
-UCL `v2.0.0` introduces **optional static type annotations** and
+UCL `v2.0.0` introduced **optional static type annotations** and
 **compile-time checking** while preserving dynamic evaluation for programs that
 do not opt in. The feature provides an incremental migration path: existing v1
 source continues to parse and follows its established runtime semantics, while

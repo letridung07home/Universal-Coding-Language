@@ -2,6 +2,15 @@
 
 All notable changes to UCL are documented here.
 
+## 2.0.1 - 2026-08-28
+
+### Fixed
+
+- Restored type-checker support for user-defined functions and callable values
+  whose names shadow built-ins such as `upper` or `len`. Static checking now
+  resolves lexical bindings before the built-in prelude, matching UCL runtime
+  name resolution and allowing valid annotated programs to check and run.
+
 ## 2.0.0 - 2026-08-28
 
 ### Breaking

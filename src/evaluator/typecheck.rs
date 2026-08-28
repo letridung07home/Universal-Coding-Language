@@ -558,34 +558,37 @@ impl TypeChecker<'_> {
     fn call(&mut self, callee: &AstNode, arguments: &[AstNode], active: bool) -> Type {
         if let AstKind::Identifier = callee.kind {
             let name = self.name(callee.span, "function");
-            if let Some(builtin) = builtin(&name) {
-                return self.builtin_call(builtin, arguments, active);
-            }
-            if let Some(binding) = self.context.lookup(&name).cloned()
-                && let Some(signature) = binding.signature
-            {
-                for (index, argument) in arguments.iter().enumerate() {
-                    let expected = signature
-                        .parameters
-                        .get(index)
-                        .copied()
-                        .unwrap_or(Type::Unknown);
-                    let actual = self.node(argument, active || expected != Type::Unknown);
-                    if active || expected != Type::Unknown {
-                        self.expect(expected, actual, argument.span, "function argument");
+            // Runtime lookup resolves lexical bindings before the built-in
+            // prelude. Mirror that ordering here: a user function or callable
+            // value named `upper`, `len`, and so on must not be checked as the
+            // built-in it shadows.
+            if let Some(binding) = self.context.lookup(&name).cloned() {
+                if let Some(signature) = binding.signature {
+                    for (index, argument) in arguments.iter().enumerate() {
+                        let expected = signature
+                            .parameters
+                            .get(index)
+                            .copied()
+                            .unwrap_or(Type::Unknown);
+                        let actual = self.node(argument, active || expected != Type::Unknown);
+                        if active || expected != Type::Unknown {
+                            self.expect(expected, actual, argument.span, "function argument");
+                        }
                     }
+                    if active && arguments.len() != signature.parameters.len() {
+                        self.error(
+                            callee.span,
+                            format!(
+                                "type error: `{name}` expects {} argument(s), received {}",
+                                signature.parameters.len(),
+                                arguments.len()
+                            ),
+                        );
+                    }
+                    return signature.return_type;
                 }
-                if active && arguments.len() != signature.parameters.len() {
-                    self.error(
-                        callee.span,
-                        format!(
-                            "type error: `{name}` expects {} argument(s), received {}",
-                            signature.parameters.len(),
-                            arguments.len()
-                        ),
-                    );
-                }
-                return signature.return_type;
+            } else if let Some(builtin) = builtin(&name) {
+                return self.builtin_call(builtin, arguments, active);
             }
         }
         let callee_type = self.node(callee, active);
