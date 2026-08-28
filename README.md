@@ -7,11 +7,10 @@ provides an interpreter with a lexer, parser, evaluator, file-based modules,
 an interactive REPL, a command-line interface, and source-aware diagnostics.
 
 > [!NOTE]
-> UCL 2.0.2 is the current stable release. It preserves UCL's dynamic default
-> while adding optional static annotations and check-only or strict CLI modes.
-> This patch enforces complete function signatures in `--strict-types`;
-> the 2.0.1 built-in-shadowing fix remains included. The deliberate v2 compatibility changes are documented in the
-> [compatibility guarantees](docs/guarantees.md) and
+> UCL 2.1.0 is the current stable release. It preserves UCL's dynamic default
+> and optional static annotations while adding `ucl check` for safe multi-file
+> checking in CI and editor workflows. The deliberate v2 compatibility changes
+> are documented in the [compatibility guarantees](docs/guarantees.md) and
 > [v2 release record](docs/v2-goal.md).
 
 ## Features
@@ -31,6 +30,8 @@ an interactive REPL, a command-line interface, and source-aware diagnostics.
 - Functions: declarations, literals, closures, and recursion
 - Optional static type annotations on declarations and function signatures
 - Static check-only (`ucl --type-check`) and strict evaluation (`ucl --strict-types`) modes
+- Multi-file, non-evaluating batch checking with `ucl check`, including
+  transitive imported modules and optional strict signatures
 - `let` declarations and assignment
 - Blocks with lexical scoping
 - File-based modules: `use "path";` and `use "path" as math;`, with
@@ -94,6 +95,18 @@ $ ucl --type-check app.ucl
 $ ucl --strict-types app.ucl
 ```
 
+Check multiple entry files and every transitive imported module without
+executing any program code:
+
+```console
+$ ucl check app.ucl tools/report.ucl
+$ ucl check --strict-types -p ./lib app.ucl tools/report.ucl
+```
+
+`ucl check` deduplicates modules shared by multiple entry files and uses the
+same explicit `-p/--path` then `UCL_PATH` search ordering as normal module
+resolution.
+
 ```ucl
 fn twice(value: int): int { value + value; };
 let answer: int = twice(21);
@@ -104,7 +117,7 @@ interactive session by running `ucl` without arguments:
 
 ```console
 $ cargo run
-UCL 1.3.0 interactive mode — type :help for help.
+UCL 2.1.0 interactive mode — type :help for help.
 >>> let x = 40;
 >>> x + 2;
 42
@@ -195,6 +208,7 @@ architecture, and contribution instructions.
 │   └── repl.rs          # Interactive session loop
 ├── tests/
 │   ├── cli.rs           # End-to-end CLI and REPL tests
+│   ├── check_cli.rs     # Multi-file `ucl check` integration tests
 │   ├── property.rs      # Property-based tests
 │   ├── formatting.rs    # Formatter idempotency and semantics tests
 │   └── smoke.rs         # Public API smoke tests
@@ -235,7 +249,9 @@ stable v1 line with a compatibility audit and automated release-metadata gate.
 UCL 2.0.0 completes the major-version transition to optional static checking:
 typed declarations and function signatures are checked before evaluation,
 `--type-check` performs analysis only, and `--strict-types` requires complete
-function signatures. Future work is tracked in the [project roadmap](docs/roadmap.md).
+function signatures. UCL 2.1.0 adds `ucl check` for non-evaluating batch checks
+across multiple entry files and all of their imports. Future work is tracked in
+the [project roadmap](docs/roadmap.md).
 
 ## Contributing
 

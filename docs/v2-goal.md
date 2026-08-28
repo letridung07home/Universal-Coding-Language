@@ -1,7 +1,7 @@
 # UCL v2.0.0: Optional Static Type Checking
 
 **Initial release:** `2.0.0`
-**Current v2 release:** `2.0.2`
+**Current v2 release:** `2.1.0`
 **Status:** Implemented and maintained
 **Branch:** `main`
 
@@ -44,6 +44,7 @@ fully annotated parameter and return signature.
 | `ucl --type-check program.ucl` | Checks source and reports static errors | No |
 | `ucl --type-check --strict-types program.ucl` | Strictly checks source only | No |
 | `ucl --strict-types program.ucl` | Strictly checks source, then evaluates it | Yes, if checking succeeds |
+| `ucl check program.ucl ...` | Checks one or more entry files and their imports | No |
 
 ## Deliberate breaking changes
 
@@ -86,3 +87,12 @@ value-allocation budget—are unchanged.
 | Type annotations format canonically | Implemented and verified |
 | v2 guarantees replace the v1 dynamic-only contract | Documented in `docs/guarantees.md` |
 | Final v1 contract remains available | Archived in `docs/v1-guarantees.md` |
+
+## UCL 2.1.0: batch checking
+
+UCL 2.1.0 adds the non-evaluating `ucl check` subcommand for CI and editor
+workflows. It accepts multiple entry files, resolves each complete import graph,
+deduplicates shared modules, and lexes, parses, and statically checks every
+unique source file without executing program code. The command supports the
+same `-p/--path` and `UCL_PATH` search behavior as normal module resolution and
+can opt into complete-signature enforcement with `--strict-types`.

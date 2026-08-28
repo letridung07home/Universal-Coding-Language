@@ -2,6 +2,26 @@
 
 All notable changes to UCL are documented here.
 
+## 2.1.0 - 2026-08-28
+
+### Added
+
+- Added `ucl check [-p <dir>]... [--strict-types] <file>...`, a non-evaluating
+  batch checker for CI and editor workflows. One invocation can validate
+  multiple entry files plus every transitive imported module.
+- Batch checking resolves imports with the same relative-first,
+  extensionless, `-p/--path`, and `UCL_PATH` behavior as normal execution,
+  deduplicates shared modules across entry graphs, and can enforce complete
+  function signatures with `--strict-types`.
+- Added end-to-end coverage for multi-entry success, per-file type failures,
+  strict signatures, imported-module failures, and missing input.
+
+### Changed
+
+- Updated CLI help, compatibility guarantees, roadmap, release record, and
+  README examples for the additive 2.1 batch-checking interface. The existing
+  single-source `--type-check` command remains supported unchanged.
+
 ## 2.0.2 - 2026-08-28
 
 ### Fixed

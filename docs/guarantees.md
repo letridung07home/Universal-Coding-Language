@@ -1,9 +1,9 @@
 # UCL v2 Compatibility Guarantees
 
-**Active version:** `2.0.2`
+**Active version:** `2.1.0`
 
 This document describes the UCL project’s stability commitments from version
-`2.0.0` onward, with `2.0.2` as the current patch release. It covers the language, the `ucl` command-line program, and the
+`2.0.0` onward, with `2.1.0` as the current minor release. It covers the language, the `ucl` command-line program, and the
 Rust library crate. The final v1 contract is preserved unchanged in
 [`v1-guarantees.md`](v1-guarantees.md).
 
@@ -91,6 +91,15 @@ executing it. `ucl --strict-types <file>` checks strictly and then evaluates
 only when checking succeeds. The inspection-only `--list-imports` mode cannot
 be combined with type-checking flags. Successful check-only commands exit `0`,
 static or runtime program failures exit `1`, and usage or input errors exit `2`.
+
+UCL 2.1 adds `ucl check [-p <dir>]... [--strict-types] <file>...` as an additive
+batch-checking interface. It resolves the complete import graph of each entry
+file, deduplicates shared modules, and lexes, parses, and statically checks each
+unique source without evaluation. `-p/--path` directories take precedence over
+`UCL_PATH`, matching normal module resolution. The command exits `0` when every
+source passes, `1` when any source or type check fails, and `2` for usage or
+input errors. The existing single-source `--type-check` interface remains
+supported.
 
 ## Source formatter and modules
 
