@@ -1047,7 +1047,9 @@ fn strict_types_requires_function_signatures_and_evaluates_valid_programs() {
     let (stdout, stderr, code) = run_args(&["--strict-types", "-e", "fn id(x) { x; }; id(1);"]);
     assert_eq!(code, 1);
     assert!(stdout.is_empty());
-    assert!(stderr.contains("--strict-types` requires an annotated function signature"));
+    assert!(stderr.contains(
+        "--strict-types` requires every function parameter and return type to be annotated"
+    ));
 
     let (stdout, stderr, code) = run_args(&[
         "--strict-types",
@@ -1066,4 +1068,21 @@ fn inspection_and_type_checking_modes_cannot_be_combined() {
     assert_eq!(code, 2);
     assert!(stdout.is_empty());
     assert!(stderr.contains("cannot combine `--list-imports` with type-checking flags"));
+}
+
+#[test]
+fn strict_types_rejects_partially_annotated_function_signatures() {
+    for program in [
+        "fn identity(value: int) { value; };",
+        "fn add(left: int, right): int { left; };",
+        "fn add(left, right: int): int { right; };",
+    ] {
+        let (stdout, stderr, code) = run_args(&["--strict-types", "-e", program]);
+        assert_eq!(code, 1, "program unexpectedly succeeded: {program}");
+        assert!(stdout.is_empty());
+        assert!(
+            stderr.contains("requires every function parameter and return type to be annotated"),
+            "stderr for {program}: {stderr}"
+        );
+    }
 }

@@ -131,7 +131,7 @@ Refactor work tracked for future releases; none changes language behavior:
 
 ### Release pipeline status
 
-- **UCL 2.0.1** is the current maintenance release following the first v2
+- **UCL 2.0.2** is the current maintenance release following the first v2
   release. It restores static type checking for user bindings that shadow
   built-in names, preserving the runtime’s lexical name-resolution semantics.
   Its tag-driven workflow builds Linux x86_64, macOS (Apple Silicon and Intel),

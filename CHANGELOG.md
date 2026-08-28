@@ -2,6 +2,13 @@
 
 All notable changes to UCL are documented here.
 
+## 2.0.2 - 2026-08-28
+
+### Fixed
+
+- `--strict-types` now enforces its documented complete-signature contract: every function parameter and the return type must be annotated. Previously, a single annotation was enough to let a partially typed function pass strict mode.
+- Added end-to-end CLI regression coverage for missing return annotations and mixed annotated/unannotated parameter lists.
+
 ## 2.0.1 - 2026-08-28
 
 ### Fixed
