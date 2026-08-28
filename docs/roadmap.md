@@ -32,6 +32,7 @@ concrete implementation work should be tracked in issues as it is scheduled.
 - [x] Design a module and package system
 - [x] Add an interactive REPL
 - [x] Provide release artifacts and installation instructions
+- [x] Add a multi-file, non-evaluating batch checker for CI and editor workflows
 
 ## Completed foundation
 
@@ -62,7 +63,8 @@ than scheduled:
 
 Every planned v1 item was completed in UCL 1.19.0, the final stable v1
 release. UCL 2.0.0 then delivered the explicitly breaking transition to optional
-static type checking. The current language, CLI, library API, and error
+static type checking. UCL 2.1.0 adds a safe batch-checking command for multiple
+entry files and their imports. The current language, CLI, library API, and error
 categories are covered by the [v2 compatibility guarantees](guarantees.md).
 
 ## Beyond 1.7
@@ -128,13 +130,18 @@ Refactor work tracked for future releases; none changes language behavior:
 - [x] Final v1 compatibility and documentation audit, backed by a release
   metadata check that confirms the manifest, lockfile, release notes, and
   stable-contract references remain aligned (UCL 1.19.0)
+- [x] Multi-file static checking that resolves complete import graphs, avoids
+  program evaluation, deduplicates shared modules, and supports strict
+  signatures through `ucl check` (UCL 2.1.0)
 
 ### Release pipeline status
 
-- **UCL 2.0.2** is the current maintenance release following the first v2
-  release. It restores static type checking for user bindings that shadow
-  built-in names, preserving the runtime’s lexical name-resolution semantics.
-  Its tag-driven workflow builds Linux x86_64, macOS (Apple Silicon and Intel),
+- **UCL 2.1.0** is the current v2 minor release. It adds `ucl check` for safe,
+  multi-file static analysis in CI and editor workflows while keeping the
+  existing single-source `--type-check` interface. The command resolves and
+  checks imported modules without evaluation, honors `-p/--path` and
+  `UCL_PATH`, and supports `--strict-types`.
+- The tag-driven workflow builds Linux x86_64, macOS (Apple Silicon and Intel),
   and Windows x86_64 artifacts and publishes their combined `sha256sums.txt`
   manifest. The metadata gate runs before the release build to keep Cargo
   metadata, lockfiles, release notes, and the active compatibility contract
