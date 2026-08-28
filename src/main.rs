@@ -107,6 +107,11 @@ struct CheckArgs {
 /// but never executed. Exit code 0 means every file checked successfully, 1
 /// reports source/type errors, and 2 reports usage or input errors.
 fn run_check(args: &[String]) -> ExitCode {
+    if matches!(args, [flag] if flag == "-h" || flag == "--help") {
+        print_check_help();
+        return ExitCode::SUCCESS;
+    }
+
     let parsed = match parse_check_args(args) {
         Ok(parsed) => parsed,
         Err(message) => {
@@ -188,6 +193,21 @@ fn check_source_file(path: &Path, contents: String, strict_types: bool) -> bool 
     success && !sink.has_errors()
 }
 
+/// Prints help for `ucl check`.
+fn print_check_help() {
+    println!("usage: ucl check [-p <dir>]... [--strict-types] <file>...");
+    println!();
+    println!(
+        "Parse and statically check one or more UCL entry files without evaluation."
+    );
+    println!("Imported modules are resolved and checked too, but never executed.");
+    println!();
+    println!("Options:");
+    println!("  -p, --path <dir>  add a module search directory (repeatable)");
+    println!("      --strict-types require complete function annotations");
+    println!("  -h, --help        show this help");
+}
+
 /// Parses `ucl check` arguments.
 fn parse_check_args(args: &[String]) -> Result<CheckArgs, String> {
     let mut files = Vec::new();
@@ -212,16 +232,7 @@ fn parse_check_args(args: &[String]) -> Result<CheckArgs, String> {
                 strict_types = true;
             }
             "-h" | "--help" => {
-                println!("usage: ucl check [-p <dir>]... [--strict-types] <file>...");
-                println!();
-                println!("Parse and statically check one or more UCL entry files without evaluation.");
-                println!("Imported modules are resolved and checked too, but never executed.");
-                println!();
-                println!("Options:");
-                println!("  -p, --path <dir>  add a module search directory (repeatable)");
-                println!("      --strict-types require complete function annotations");
-                println!("  -h, --help        show this help");
-                return Err(String::new());
+                return Err("`--help` must be used on its own".to_owned());
             }
             flag if flag.starts_with('-') => return Err(format!("unknown option `{flag}`")),
             file => files.push(file.to_owned()),
@@ -435,9 +446,13 @@ fn parse_args(args: &[String]) -> Result<Option<ProgramArgs>, String> {
                 println!("Options:");
                 println!("  -e, --eval <code> evaluate inline program text");
                 println!("  -p, --path <dir>  add a module search directory (repeatable)");
-                println!("      --list-imports print the resolved import graph without evaluating source");
+                println!(
+                    "      --list-imports print the resolved import graph without evaluating source"
+                );
                 println!("      --type-check   check static types without evaluating source");
-                println!("      --strict-types require annotated function signatures and check before evaluation");
+                println!(
+                    "      --strict-types require annotated function signatures and check before evaluation"
+                );
                 println!("  -h, --help        show this help");
                 println!("  -V, --version     show the version");
                 println!();
@@ -519,7 +534,11 @@ fn parse_args(args: &[String]) -> Result<Option<ProgramArgs>, String> {
             Err("cannot combine `--list-imports` with type-checking flags".to_owned())
         }
         (Some(file), None) => {
-            let input = if file == "-" { Input::Stdin } else { Input::File(file) };
+            let input = if file == "-" {
+                Input::Stdin
+            } else {
+                Input::File(file)
+            };
             Ok(Some(ProgramArgs {
                 input,
                 search_paths,
