@@ -31,6 +31,12 @@ replace(
 ''',
 )
 
+replace(
+    "tests/cli.rs",
+    'stderr.contains("--strict-types` requires an annotated function signature")',
+    'stderr.contains("--strict-types` requires every function parameter and return type to be annotated")',
+)
+
 cli = Path("tests/cli.rs")
 cli.write_text(
     cli.read_text()
