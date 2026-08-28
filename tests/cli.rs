@@ -995,3 +995,51 @@ fn fmt_usage_errors_exit_two() {
     let (_, _, code, _) = run_fmt("1;", &["--wat"]);
     assert_eq!(code, 2);
 }
+
+#[test]
+fn type_check_mode_validates_annotations_without_running_the_program() {
+    let path = temp_path();
+    fs::write(&path, "let answer: int = 42; 1 / 0;").expect("write source file");
+
+    let (stdout, stderr, code) = run_args(&["--type-check", path.to_str().expect("utf-8 path")]);
+    let _ = fs::remove_file(&path);
+
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert!(stdout.is_empty());
+    assert!(stderr.is_empty());
+}
+
+#[test]
+fn type_check_mode_reports_annotated_mismatches_before_evaluation() {
+    let (stdout, stderr, code) = run_args(&["--type-check", "-e", "let answer: int = true;"]);
+
+    assert_eq!(code, 1);
+    assert!(stdout.is_empty());
+    assert!(stderr.contains("type error: initializer expects `int`, found `bool`"));
+}
+
+#[test]
+fn strict_types_requires_function_signatures_and_evaluates_valid_programs() {
+    let (stdout, stderr, code) = run_args(&["--strict-types", "-e", "fn id(x) { x; }; id(1);"]);
+    assert_eq!(code, 1);
+    assert!(stdout.is_empty());
+    assert!(stderr.contains("--strict-types` requires an annotated function signature"));
+
+    let (stdout, stderr, code) = run_args(&[
+        "--strict-types",
+        "-e",
+        "fn twice(x: int): int { x + x; }; twice(21);",
+    ]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert_eq!(stdout, "42\n");
+    assert!(stderr.is_empty());
+}
+
+#[test]
+fn inspection_and_type_checking_modes_cannot_be_combined() {
+    let (stdout, stderr, code) = run_args(&["--list-imports", "--type-check", "-e", "1;"]);
+
+    assert_eq!(code, 2);
+    assert!(stdout.is_empty());
+    assert!(stderr.contains("cannot combine `--list-imports` with type-checking flags"));
+}

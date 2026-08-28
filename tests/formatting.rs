@@ -90,7 +90,7 @@ fn evaluate(source_text: &str) -> Result<Option<Value>, ()> {
     if sink.has_errors() {
         return Err(());
     }
-    let mut environment = Environment::new();
+    let mut environment = Environment::default();
     let value = Evaluator::new().evaluate_in(&mut environment, &ast, &source, &mut sink);
     if sink.has_errors() {
         return Err(());

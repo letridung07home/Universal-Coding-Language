@@ -7,11 +7,11 @@ provides an interpreter with a lexer, parser, evaluator, file-based modules,
 an interactive REPL, a command-line interface, and source-aware diagnostics.
 
 > [!NOTE]
-> UCL 1.19.0 is the final stable v1 release: the language, CLI, library API,
-> and error categories are covered by [compatibility guarantees](docs/guarantees.md).
-> It remains a deliberately small language — not a batteries-included
-> general-purpose scripting environment. The planned, explicitly breaking v2
-> direction is [optional static type checking](docs/v2-goal.md).
+> UCL 2.0.0 is the current stable release. It preserves UCL's dynamic default
+> while adding optional static annotations and check-only or strict CLI modes.
+> The deliberate v2 compatibility changes are documented in the
+> [compatibility guarantees](docs/guarantees.md) and
+> [v2 release record](docs/v2-goal.md).
 
 ## Features
 
@@ -28,6 +28,8 @@ an interactive REPL, a command-line interface, and source-aware diagnostics.
 - `if`/`else` conditionals, `while` and `for` loops, and `break` and
   `continue` loop control
 - Functions: declarations, literals, closures, and recursion
+- Optional static type annotations on declarations and function signatures
+- Static check-only (`ucl --type-check`) and strict evaluation (`ucl --strict-types`) modes
 - `let` declarations and assignment
 - Blocks with lexical scoping
 - File-based modules: `use "path";` and `use "path" as math;`, with
@@ -81,6 +83,19 @@ $ ucl --list-imports -p ./lib app.ucl
 /path/to/app.ucl
 /path/to/app.ucl -> /path/to/lib/math.ucl
 /path/to/lib/math.ucl -> /path/to/lib/numbers.ucl
+```
+
+Opt into static checking without executing source, or require fully typed
+function signatures before normal evaluation:
+
+```console
+$ ucl --type-check app.ucl
+$ ucl --strict-types app.ucl
+```
+
+```ucl
+fn twice(value: int): int { value + value; };
+let answer: int = twice(21);
 ```
 
 Use `cargo run -- --help` to display command-line help, or start an
@@ -216,9 +231,10 @@ concatenation, and preserves fuzz artifacts when a nightly run fails; UCL
 1.17 adds a cumulative loop-iteration budget; UCL 1.18 adds a read-only
 resolved import graph through `ucl --list-imports`; and UCL 1.19 completes the
 stable v1 line with a compatibility audit and automated release-metadata gate.
-The next direction is the draft, explicitly breaking [v2.0.0 goal for optional
-static type checking](docs/v2-goal.md); future milestones are tracked in the
-[project roadmap](docs/roadmap.md).
+UCL 2.0.0 completes the major-version transition to optional static checking:
+typed declarations and function signatures are checked before evaluation,
+`--type-check` performs analysis only, and `--strict-types` requires complete
+function signatures. Future work is tracked in the [project roadmap](docs/roadmap.md).
 
 ## Contributing
 

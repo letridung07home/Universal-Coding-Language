@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use crate::module::ModuleState;
 
-use super::{BuiltinFunction, Value};
+use super::{BuiltinFunction, TypeContext, Value};
 
 /// A stack of lexical scopes, each mapping names to values.
 ///
@@ -27,6 +27,8 @@ pub struct Environment {
     /// Read-only built-ins consulted after every user scope. A user declaration
     /// may shadow a built-in, but assignment never mutates the prelude.
     builtins: HashMap<String, Value>,
+    /// Compile-time bindings retained across evaluations in this session.
+    pub(crate) types: TypeContext,
     /// Module loading bookkeeping: what has been evaluated and what is
     /// currently in progress. Owned logic lives in [`crate::module`].
     pub(crate) modules: ModuleState,
@@ -34,12 +36,17 @@ pub struct Environment {
 
 impl Environment {
     /// Creates an empty environment containing only the global scope.
-    pub fn new() -> Self {
+    ///
+    /// The supplied [`TypeContext`] owns static bindings for the same session.
+    /// Passing it explicitly is a v2 API change: embedders can now retain or
+    /// reset runtime and compile-time state together with deliberate control.
+    pub fn new(types: TypeContext) -> Self {
         Self {
             scopes: vec![HashMap::new()],
             builtins: BuiltinFunction::all()
                 .map(|builtin| (builtin.name().to_owned(), Value::Builtin(builtin)))
                 .collect(),
+            types,
             modules: ModuleState::default(),
         }
     }
@@ -182,6 +189,6 @@ impl Environment {
 
 impl Default for Environment {
     fn default() -> Self {
-        Self::new()
+        Self::new(TypeContext::new())
     }
 }

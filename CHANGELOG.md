@@ -2,6 +2,54 @@
 
 All notable changes to UCL are documented here.
 
+## 2.0.0 - 2026-08-28
+
+### Breaking
+
+- Replaced the v1 dynamic-only type contract with optional static annotations
+  and pre-evaluation checking. Source containing annotations may now report a
+  compile-time type error instead of reaching the former runtime mismatch.
+  Unannotated source retains v1 dynamic evaluation semantics; see
+  `docs/guarantees.md` for the active contract and `docs/v1-guarantees.md` for
+  the preserved v1 contract.
+- Changed the public AST shape: `AstKind::Let` now records an optional
+  `TypeAnnotation`, and `AstKind::Function` now records `Parameter` values and
+  an optional return annotation. Added public `Type`, `TypeContext`,
+  `TypeName`, `TypeAnnotation`, and `Parameter` types.
+- Changed `Environment::new()` to require `Environment::new(TypeContext)` so
+  library consumers explicitly manage static binding state. `Environment::default()`
+  creates a fresh environment with an empty type context.
+
+### Added
+
+- Optional type annotations on declarations (`let answer: int = 42;`), function
+  parameters (`fn twice(value: int)`) and function returns
+  (`fn twice(value: int): int`). Type names are contextual rather than newly
+  reserved: `int`, `bool`, `string`, `list`, `function`, `unit`, and `module`
+  retain their identifier meaning outside annotation positions.
+- Static checking of known declaration and assignment values, unary and binary
+  operators, boolean conditions, ranges, indexes, module member access, typed
+  function calls and results, and supported built-in calls. Failed checks are
+  source-anchored diagnostics and prevent evaluation.
+- `ucl --type-check [--strict-types] <file>` to validate source without running
+  it, plus `ucl --strict-types <file>` to require complete function signatures
+  before evaluating. Type-checking flags cannot be combined with the read-only
+  `--list-imports` command.
+- The public `Evaluator::type_check` API for check-only integrations and
+  `Evaluator::evaluate_typed` / `Evaluator::evaluate_typed_in` for strict
+  check-then-evaluate integrations.
+- A deterministic 1,000,000-node type-checking work budget independent of the
+  existing evaluator resource limits.
+
+### Changed
+
+- `ucl fmt` preserves annotations and renders canonical typed declarations and
+  signatures, such as `let answer: int = 42;` and
+  `fn twice(value: int): int { ... }`.
+- Annotated module sources are checked before module evaluation, preserving the
+  established module-resolution behavior while preventing deferred type errors
+  from imported typed code.
+
 ## 1.19.0 - 2026-08-28
 
 ### Internal

@@ -3,6 +3,44 @@
 use crate::diagnostic::{Diagnostic, DiagnosticSink};
 use crate::source::{SourceFile, Span};
 
+/// A type name recognized only in an annotation position.
+///
+/// Type names remain ordinary identifiers outside a `:` annotation, preserving
+/// the v1 reserved-keyword set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TypeName {
+    /// The signed 64-bit integer type, written `int`.
+    Integer,
+    /// The boolean type, written `bool`.
+    Boolean,
+    /// The UTF-8 string type, written `string`.
+    String,
+    /// The immutable list type, written `list`.
+    List,
+    /// The callable function type, written `function`.
+    Function,
+    /// The unit type, written `unit`.
+    Unit,
+    /// The imported module namespace type, written `module`.
+    Module,
+}
+
+impl TypeName {
+    /// Recognizes a type name from its source spelling.
+    fn parse(text: &str) -> Option<Self> {
+        match text {
+            "int" => Some(Self::Integer),
+            "bool" => Some(Self::Boolean),
+            "string" => Some(Self::String),
+            "list" => Some(Self::List),
+            "function" => Some(Self::Function),
+            "unit" => Some(Self::Unit),
+            "module" => Some(Self::Module),
+            _ => None,
+        }
+    }
+}
+
 /// A reserved word recognized by the lexer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Keyword {
@@ -44,6 +82,8 @@ pub enum TokenKind {
     ///
     /// Outside that import position, `as` remains an ordinary identifier.
     ImportAs,
+    /// A type name recognized after `:` in an annotation.
+    TypeName(TypeName),
     /// An identifier: `foo`, `answer`, etc.
     ///
     /// Keywords such as `let` are produced as [`TokenKind::Keyword`] rather
@@ -159,6 +199,10 @@ impl<'src> Lexer<'src> {
         let mut tokens = Vec::new();
         let mut comments = Vec::new();
         let mut import_context = ImportContext::None;
+        // `:` introduces an annotation-only context. Type spellings are still
+        // identifiers everywhere else, so existing v1 programs retain their
+        // namespace unchanged.
+        let mut awaits_type_name = false;
         let mut pos = 0;
 
         while pos < bytes.len() {
@@ -248,6 +292,12 @@ impl<'src> Lexer<'src> {
                 if import_context == ImportContext::AwaitAs && text == "as" {
                     kind = TokenKind::ImportAs;
                     import_context = ImportContext::AwaitAlias;
+                }
+                if awaits_type_name {
+                    if let Some(type_name) = TypeName::parse(text) {
+                        kind = TokenKind::TypeName(type_name);
+                    }
+                    awaits_type_name = false;
                 }
                 tokens.push(Token {
                     kind,
@@ -374,6 +424,11 @@ impl<'src> Lexer<'src> {
                     kind,
                     span: Span::new(start, pos),
                 });
+                if byte == b':' {
+                    awaits_type_name = true;
+                } else if awaits_type_name {
+                    awaits_type_name = false;
+                }
                 if import_context != ImportContext::None {
                     import_context = ImportContext::None;
                 }

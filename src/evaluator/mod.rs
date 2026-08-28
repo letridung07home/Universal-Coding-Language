@@ -26,17 +26,19 @@ use std::rc::Rc;
 
 use crate::diagnostic::{Diagnostic, DiagnosticSink, Severity};
 use crate::lexer::unescape_string;
-use crate::parser::{AstKind, AstNode, BinaryOperator};
+use crate::parser::{AstKind, AstNode, BinaryOperator, Parameter};
 use crate::source::{SourceFile, Span};
 
 mod builtins;
 mod environment;
 #[cfg(test)]
 mod tests;
+mod typecheck;
 mod value;
 
 pub use builtins::BuiltinFunction;
 pub use environment::Environment;
+pub use typecheck::{Type, TypeContext};
 pub use value::{FunctionValue, ModuleValue, Value};
 /// The maximum evaluation-nesting depth allowed before an error is reported.
 ///
@@ -169,8 +171,52 @@ impl Evaluator {
         source: &SourceFile,
         sink: &mut DiagnosticSink,
     ) -> Option<Value> {
-        let mut environment = Environment::new();
+        let mut environment = Environment::default();
         self.evaluate_in(&mut environment, root, source, sink)
+    }
+
+    /// Performs static type checking without evaluating the program.
+    ///
+    /// When `strict` is false, only annotations activate checks; when it is
+    /// true, every function must declare a complete signature and all known
+    /// expressions are checked. The context can be reused across calls to
+    /// retain type bindings in interactive or embedded sessions.
+    pub fn type_check(
+        &self,
+        root: &AstNode,
+        source: &SourceFile,
+        context: &mut TypeContext,
+        sink: &mut DiagnosticSink,
+        strict: bool,
+    ) -> bool {
+        typecheck::check(root, source, context, sink, strict)
+    }
+
+    /// Checks and evaluates a source tree in strict type mode.
+    ///
+    /// Unlike [`Self::evaluate`], this entry point requires every function to
+    /// declare parameter and return annotations. Unannotated expressions stay
+    /// dynamically typed, but all available static information is validated
+    /// before evaluation begins.
+    pub fn evaluate_typed(
+        &self,
+        root: &AstNode,
+        source: &SourceFile,
+        sink: &mut DiagnosticSink,
+    ) -> Option<Value> {
+        let mut environment = Environment::default();
+        self.evaluate_typed_in(&mut environment, root, source, sink)
+    }
+
+    /// Checks and evaluates a tree in strict mode inside an existing environment.
+    pub fn evaluate_typed_in(
+        &self,
+        environment: &mut Environment,
+        root: &AstNode,
+        source: &SourceFile,
+        sink: &mut DiagnosticSink,
+    ) -> Option<Value> {
+        self.evaluate_with_types(environment, root, source, sink, true)
     }
 
     /// Evaluates the given AST inside an existing [`Environment`].
@@ -190,6 +236,21 @@ impl Evaluator {
         source: &SourceFile,
         sink: &mut DiagnosticSink,
     ) -> Option<Value> {
+        self.evaluate_with_types(environment, root, source, sink, false)
+    }
+
+    /// Runs optional or strict static checking, then evaluates only on success.
+    fn evaluate_with_types(
+        &self,
+        environment: &mut Environment,
+        root: &AstNode,
+        source: &SourceFile,
+        sink: &mut DiagnosticSink,
+        strict: bool,
+    ) -> Option<Value> {
+        if !typecheck::check(root, source, &mut environment.types, sink, strict) {
+            return None;
+        }
         self.call_depth.set(0);
         self.resource_exhausted.set(false);
         self.allocated_bytes.set(0);
@@ -650,7 +711,7 @@ impl Evaluator {
         &self,
         node: &AstNode,
         name: Option<Span>,
-        parameters: &[Span],
+        parameters: &[Parameter],
         body: &AstNode,
         source: &SourceFile,
         environment: &mut Environment,
@@ -658,8 +719,9 @@ impl Evaluator {
     ) -> Value {
         let mut names = Vec::with_capacity(parameters.len());
         let mut seen = HashSet::new();
-        for parameter_span in parameters {
-            let Some(parameter) = source.slice(*parameter_span) else {
+        for parameter in parameters {
+            let parameter_span = parameter.name;
+            let Some(parameter) = source.slice(parameter_span) else {
                 sink.emit(
                     Diagnostic::error("function declaration has an invalid parameter span")
                         .at(node.span),
@@ -669,7 +731,7 @@ impl Evaluator {
             if !seen.insert(parameter) {
                 sink.emit(
                     Diagnostic::error(format!("duplicate function parameter `{parameter}`"))
-                        .at(*parameter_span),
+                        .at(parameter_span),
                 );
                 return Value::Unit;
             }

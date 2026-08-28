@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::diagnostic::{Diagnostic, DiagnosticSink};
-use crate::evaluator::{Environment, Evaluator, ModuleValue, Value};
+use crate::evaluator::{Environment, Evaluator, ModuleValue, TypeContext, Value};
 use crate::lexer::{Lexer, unescape_string};
 use crate::parser::{AstKind, Parser};
 use crate::source::{SourceFile, Span};
@@ -406,6 +406,17 @@ impl Evaluator {
                 report_module_failure(sink, &module_path, &module_sink, *path_span);
                 return Value::Unit;
             }
+            let mut module_types = TypeContext::new();
+            if !Evaluator::new().type_check(
+                &module_ast,
+                &module_source,
+                &mut module_types,
+                &mut module_sink,
+                false,
+            ) {
+                report_module_failure(sink, &module_path, &module_sink, *path_span);
+                return Value::Unit;
+            }
 
             environment.modules.begin(module_path.clone());
             // Swap in a fresh global scope so the module cannot see (or mutate)
@@ -539,7 +550,7 @@ mod module_tests {
             let tokens = Lexer::new(&source).tokenize(&mut sink);
             let value = match Parser::new(tokens).parse(&mut sink) {
                 Some(ast) => {
-                    let mut environment = Environment::new();
+                    let mut environment = Environment::default();
                     for directory in search_paths {
                         environment.add_search_path(directory);
                     }

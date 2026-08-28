@@ -21,7 +21,7 @@ mod repl;
 use render::{format_value, render_diagnostics};
 
 /// Usage text printed on argument errors and `--help`.
-const USAGE: &str = "usage: ucl [-p <dir>]... [-e <code> | <file>] [--list-imports]\n       ucl fmt [--check] [<file> | -]";
+const USAGE: &str = "usage: ucl [-p <dir>]... [-e <code> | <file>] [--list-imports | --type-check] [--strict-types]\n       ucl fmt [--check] [<file> | -]";
 
 /// The environment variable holding module search directories, separated by
 /// the platform's path separator (`:` on Unix, `;` on Windows).
@@ -39,6 +39,8 @@ fn main() -> ExitCode {
         input,
         mut search_paths,
         list_imports,
+        type_check,
+        strict_types,
     } = match parse_args(&args) {
         Ok(Some(parsed)) => parsed,
         // The REPL, `--help`, and `--version` handle their own output.
@@ -66,7 +68,7 @@ fn main() -> ExitCode {
     if list_imports {
         run_list_imports(&name, contents, &search_paths)
     } else {
-        run_program(&name, contents, &search_paths)
+        run_program(&name, contents, &search_paths, type_check, strict_types)
     }
 }
 
@@ -88,6 +90,10 @@ struct ProgramArgs {
     search_paths: Vec<String>,
     /// Whether to print the resolved import graph instead of evaluating source.
     list_imports: bool,
+    /// Whether to run static checking only, without evaluating source.
+    type_check: bool,
+    /// Whether to require complete function signatures before evaluation.
+    strict_types: bool,
 }
 
 /// The formatter subcommand's parsed arguments.
@@ -220,11 +226,18 @@ fn read_input(input: &Input) -> Result<(String, String), String> {
 /// lexical errors is never parsed and one with syntax errors is never
 /// evaluated. This keeps diagnostics focused on the root cause instead of
 /// cascading through downstream stages fed garbage input.
-fn run_program(name: &str, contents: String, search_paths: &[String]) -> ExitCode {
+fn run_program(
+    name: &str,
+    contents: String,
+    search_paths: &[String],
+    type_check_only: bool,
+    strict_types: bool,
+) -> ExitCode {
     let source = SourceFile::new(name, contents);
     let mut sink = DiagnosticSink::new();
 
-    let mut environment = Environment::new();
+    let mut environment = Environment::default();
+    let mut type_context = ucl::TypeContext::new();
     for dir in search_paths {
         environment.add_search_path(dir);
     }
@@ -235,7 +248,16 @@ fn run_program(name: &str, contents: String, search_paths: &[String]) -> ExitCod
         && let Some(ast) = Parser::new(tokens).parse(&mut sink)
         && !sink.has_errors()
     {
-        value = Evaluator::new().evaluate_in(&mut environment, &ast, &source, &mut sink);
+        let evaluator = Evaluator::new();
+        if type_check_only {
+            if evaluator.type_check(&ast, &source, &mut type_context, &mut sink, strict_types) {
+                value = Some(ucl::Value::Unit);
+            }
+        } else if strict_types {
+            value = evaluator.evaluate_typed_in(&mut environment, &ast, &source, &mut sink);
+        } else {
+            value = evaluator.evaluate_in(&mut environment, &ast, &source, &mut sink);
+        }
     }
 
     render_diagnostics(&sink, &source);
@@ -282,6 +304,8 @@ fn parse_args(args: &[String]) -> Result<Option<ProgramArgs>, String> {
     let mut eval = None;
     let mut search_paths = Vec::new();
     let mut list_imports = false;
+    let mut type_check = false;
+    let mut strict_types = false;
 
     let mut index = 1;
     while index < args.len() {
@@ -299,6 +323,10 @@ fn parse_args(args: &[String]) -> Result<Option<ProgramArgs>, String> {
                 println!("  -p, --path <dir>  add a module search directory (repeatable)");
                 println!(
                     "      --list-imports print the resolved import graph without evaluating source"
+                );
+                println!("      --type-check   check static types without evaluating source");
+                println!(
+                    "      --strict-types require annotated function signatures and check before evaluation"
                 );
                 println!("  -h, --help        show this help");
                 println!("  -V, --version     show the version");
@@ -342,6 +370,18 @@ module imports also consult {SEARCH_PATH_ENV} directories \
                 }
                 list_imports = true;
             }
+            "--type-check" => {
+                if type_check {
+                    return Err("repeated `--type-check` flag".to_owned());
+                }
+                type_check = true;
+            }
+            "--strict-types" => {
+                if strict_types {
+                    return Err("repeated `--strict-types` flag".to_owned());
+                }
+                strict_types = true;
+            }
             // `-` is the conventional placeholder for standard input and
             // must be matched before the unknown-option guard below.
             "-" => {
@@ -367,6 +407,9 @@ module imports also consult {SEARCH_PATH_ENV} directories \
 
     match (file, eval) {
         (Some(_), Some(_)) => Err("cannot combine `--eval` with a source file".to_owned()),
+        _ if list_imports && (type_check || strict_types) => {
+            Err("cannot combine `--list-imports` with type-checking flags".to_owned())
+        }
         (Some(file), None) => {
             let input = if file == "-" {
                 Input::Stdin
@@ -377,12 +420,16 @@ module imports also consult {SEARCH_PATH_ENV} directories \
                 input,
                 search_paths,
                 list_imports,
+                type_check,
+                strict_types,
             }))
         }
         (None, Some(code)) => Ok(Some(ProgramArgs {
             input: Input::Eval(code),
             search_paths,
             list_imports,
+            type_check,
+            strict_types,
         })),
         (None, None) if list_imports => {
             Err("`--list-imports` requires a source file, `-`, or `--eval` program".to_owned())

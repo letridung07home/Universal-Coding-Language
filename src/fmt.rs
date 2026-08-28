@@ -173,10 +173,19 @@ impl<'src> Formatter<'src> {
     fn emit_statement_inner(&mut self, node: &AstNode, indent: usize) {
         self.out.push_str(&indent_padding(indent));
         match &node.kind {
-            AstKind::Let { name, value, .. } => {
+            AstKind::Let {
+                name,
+                annotation,
+                value,
+                ..
+            } => {
                 let name = self.verbatim(*name);
                 self.out.push_str("let ");
                 self.out.push_str(&name);
+                if let Some(annotation) = annotation {
+                    self.out.push_str(": ");
+                    self.out.push_str(&self.verbatim(annotation.span));
+                }
                 self.out.push_str(" = ");
                 self.emit_value_suffix(value, indent);
                 self.out.push_str(";\n");
@@ -331,6 +340,7 @@ impl<'src> Formatter<'src> {
             AstKind::Function {
                 name,
                 parameters,
+                return_type,
                 body,
                 ..
             } => {
@@ -341,10 +351,24 @@ impl<'src> Formatter<'src> {
                     self.out.push_str(&name);
                 }
                 self.out.push('(');
-                let parameters: Vec<String> =
-                    parameters.iter().map(|span| self.verbatim(*span)).collect();
+                let parameters: Vec<String> = parameters
+                    .iter()
+                    .map(|parameter| {
+                        let mut text = self.verbatim(parameter.name);
+                        if let Some(annotation) = &parameter.annotation {
+                            text.push_str(": ");
+                            text.push_str(&self.verbatim(annotation.span));
+                        }
+                        text
+                    })
+                    .collect();
                 self.out.push_str(&parameters.join(", "));
-                self.out.push_str(") ");
+                self.out.push(')');
+                if let Some(return_type) = return_type {
+                    self.out.push_str(": ");
+                    self.out.push_str(&self.verbatim(return_type.span));
+                }
+                self.out.push(' ');
                 let AstKind::Block { statements } = &body.kind else {
                     unreachable!("a function body is always a block");
                 };
@@ -534,16 +558,30 @@ impl<'src> Formatter<'src> {
             AstKind::Function {
                 name,
                 parameters,
+                return_type,
                 body,
                 ..
             } => {
-                let parameters: Vec<String> =
-                    parameters.iter().map(|span| self.verbatim(*span)).collect();
+                let parameters: Vec<String> = parameters
+                    .iter()
+                    .map(|parameter| {
+                        let mut text = self.verbatim(parameter.name);
+                        if let Some(annotation) = &parameter.annotation {
+                            text.push_str(": ");
+                            text.push_str(&self.verbatim(annotation.span));
+                        }
+                        text
+                    })
+                    .collect();
                 let name = name
                     .map(|name| format!(" {}", self.verbatim(name)))
                     .unwrap_or_default();
+                let return_type = return_type
+                    .as_ref()
+                    .map(|annotation| format!(": {}", self.verbatim(annotation.span)))
+                    .unwrap_or_default();
                 let body = self.compact_branch(body, indent);
-                format!("fn{name}({}) {body}", parameters.join(", "))
+                format!("fn{name}({}){return_type} {body}", parameters.join(", "))
             }
             other => {
                 unreachable!(
@@ -556,10 +594,19 @@ impl<'src> Formatter<'src> {
     /// Renders one statement for inclusion in a compacted body.
     fn compact_statement(&mut self, node: &AstNode, indent: usize) -> String {
         match &node.kind {
-            AstKind::Let { name, value, .. } => {
+            AstKind::Let {
+                name,
+                annotation,
+                value,
+                ..
+            } => {
                 let name = self.verbatim(*name);
+                let annotation = annotation
+                    .as_ref()
+                    .map(|annotation| format!(": {}", self.verbatim(annotation.span)))
+                    .unwrap_or_default();
                 let value = self.value_in_narrow_position(value, indent);
-                format!("let {name} = {value};")
+                format!("let {name}{annotation} = {value};")
             }
             AstKind::Assignment { target, value } => {
                 let target = self.expr_text(target, indent);

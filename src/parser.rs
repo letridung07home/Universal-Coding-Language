@@ -3,6 +3,7 @@
 use std::fmt;
 
 use crate::diagnostic::{Diagnostic, DiagnosticSink};
+pub use crate::lexer::TypeName;
 use crate::lexer::{Keyword, Token, TokenKind};
 use crate::source::Span;
 
@@ -25,6 +26,24 @@ impl AstNode {
     }
 }
 
+/// A parsed type annotation such as `: int`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TypeAnnotation {
+    /// Span covering the type name but not the preceding colon.
+    pub span: Span,
+    /// The annotated type.
+    pub name: TypeName,
+}
+
+/// A function parameter, optionally carrying a static type annotation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Parameter {
+    /// Span of the parameter identifier.
+    pub name: Span,
+    /// Optional type annotation written after the parameter name.
+    pub annotation: Option<Box<TypeAnnotation>>,
+}
+
 /// The syntactic constructs currently understood by the parser.
 #[derive(Clone, Debug, PartialEq)]
 pub enum AstKind {
@@ -42,6 +61,8 @@ pub enum AstKind {
         keyword: Span,
         /// Span of the declared name.
         name: Span,
+        /// Optional static type annotation written after the name.
+        annotation: Option<Box<TypeAnnotation>>,
         /// The initializer expression.
         value: Box<AstNode>,
     },
@@ -155,8 +176,10 @@ pub enum AstKind {
         keyword: Span,
         /// Span of the declared function name, if any.
         name: Option<Span>,
-        /// Spans of the parameter names in source order.
-        parameters: Vec<Span>,
+        /// Parameters in source order, each optionally annotated.
+        parameters: Vec<Parameter>,
+        /// Optional static return type annotation after the parameter list.
+        return_type: Option<Box<TypeAnnotation>>,
         /// The function body.
         body: Box<AstNode>,
     },
@@ -398,6 +421,7 @@ impl Parser {
                 return None;
             }
             let name = self.advance().span;
+            let annotation = self.parse_type_annotation(sink)?;
 
             if !self.consume_punctuation('=') {
                 self.error_current("expected `=` after the declared identifier", sink);
@@ -410,6 +434,7 @@ impl Parser {
                 AstKind::Let {
                     keyword,
                     name,
+                    annotation,
                     value: Box::new(value),
                 },
             ));
@@ -780,7 +805,12 @@ impl Parser {
                     self.error_current("expected an identifier in the parameter list", sink);
                     return None;
                 }
-                parameters.push(self.advance().span);
+                let parameter_name = self.advance().span;
+                let annotation = self.parse_type_annotation(sink)?;
+                parameters.push(Parameter {
+                    name: parameter_name,
+                    annotation,
+                });
                 if self.consume_punctuation(',') {
                     continue;
                 }
@@ -792,6 +822,7 @@ impl Parser {
             self.error_current("expected `)` after function parameters", sink);
             return None;
         }
+        let return_type = self.parse_type_annotation(sink)?;
 
         let body = self.parse_block(sink)?;
         Some(AstNode::new(
@@ -800,9 +831,33 @@ impl Parser {
                 keyword,
                 name,
                 parameters,
+                return_type,
                 body: Box::new(body),
             },
         ))
+    }
+
+    /// Parses an optional `: type` annotation after a binding or parameter.
+    fn parse_type_annotation(
+        &mut self,
+        sink: &mut DiagnosticSink,
+    ) -> Option<Option<Box<TypeAnnotation>>> {
+        if !self.consume_punctuation(':') {
+            return Some(None);
+        }
+        let token = *self.tokens.get(self.cursor)?;
+        let TokenKind::TypeName(name) = token.kind else {
+            self.error_current(
+                "expected a type name after `:` (`int`, `bool`, `string`, `list`, `function`, `unit`, or `module`)",
+                sink,
+            );
+            return None;
+        };
+        self.advance();
+        Some(Some(Box::new(TypeAnnotation {
+            span: token.span,
+            name,
+        })))
     }
 
     /// Parses a `while` statement: `while condition { ... }`.
