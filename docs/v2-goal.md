@@ -1,7 +1,7 @@
 # UCL v2.0.0: Optional Static Type Checking
 
 **Initial release:** `2.0.0`
-**Current v2 release:** `2.0.1`
+**Current v2 release:** `2.0.2`
 **Status:** Implemented and maintained
 **Branch:** `main`
 

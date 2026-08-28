@@ -7,10 +7,10 @@ provides an interpreter with a lexer, parser, evaluator, file-based modules,
 an interactive REPL, a command-line interface, and source-aware diagnostics.
 
 > [!NOTE]
-> UCL 2.0.1 is the current stable release. It preserves UCL's dynamic default
+> UCL 2.0.2 is the current stable release. It preserves UCL's dynamic default
 > while adding optional static annotations and check-only or strict CLI modes.
-> This patch also ensures static checking honors user bindings that shadow
-> built-in function names. The deliberate v2 compatibility changes are documented in the
+> This patch enforces complete function signatures in `--strict-types`;
+> the 2.0.1 built-in-shadowing fix remains included. The deliberate v2 compatibility changes are documented in the
 > [compatibility guarantees](docs/guarantees.md) and
 > [v2 release record](docs/v2-goal.md).
 

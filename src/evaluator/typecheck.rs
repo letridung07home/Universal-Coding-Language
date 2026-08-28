@@ -521,10 +521,14 @@ impl TypeChecker<'_> {
             || parameters
                 .iter()
                 .any(|parameter| parameter.annotation.is_some());
-        if self.strict && !has_annotation {
+        let has_complete_signature = return_type.is_some()
+            && parameters
+                .iter()
+                .all(|parameter| parameter.annotation.is_some());
+        if self.strict && !has_complete_signature {
             self.error(
                 node.span,
-                "type error: `--strict-types` requires an annotated function signature",
+                "type error: `--strict-types` requires every function parameter and return type to be annotated",
             );
         }
         let signature = FunctionSignature {
