@@ -60,10 +60,10 @@ than scheduled:
 - [x] A richer module story beyond local files: extensionless imports and
       configurable search directories (`-p/--path`, `UCL_PATH`)
 
-Every planned v1 item on this roadmap is complete as of UCL 1.19.0, the final
-stable v1 release. The language, CLI, library API, and error categories remain
-covered by the [compatibility guarantees](guarantees.md); the next direction is
-the draft, explicitly breaking [v2.0.0 static-type-checking goal](v2-goal.md).
+Every planned v1 item was completed in UCL 1.19.0, the final stable v1
+release. UCL 2.0.0 then delivered the explicitly breaking transition to optional
+static type checking. The current language, CLI, library API, and error
+categories are covered by the [v2 compatibility guarantees](guarantees.md).
 
 ## Beyond 1.7
 
@@ -131,30 +131,24 @@ Refactor work tracked for future releases; none changes language behavior:
 
 ### Release pipeline status
 
-- **UCL 1.19.0** is the final v1 release. Its tag-driven workflow builds Linux
+- **UCL 2.0.0** is the first v2 release. Its tag-driven workflow builds Linux
   x86_64, macOS (Apple Silicon and Intel), and Windows x86_64 artifacts and
   publishes their combined `sha256sums.txt` manifest. The metadata gate runs
-  before the release build to keep versioned documentation and Cargo metadata
-  synchronized.
+  before the release build to keep Cargo metadata, lockfiles, release notes,
+  and the active compatibility contract synchronized.
 - The scheduled Fuzz workflow previously reported failures on 2026-08-26 and
   2026-08-27. UCL 1.17.2 added a cumulative loop-iteration budget to cover the
   reported nested-loop family, and the subsequent manually triggered fuzz run
   completed successfully. Scheduled fuzzing remains part of the release-health
   signal.
 
-### Next direction: v2.0.0
+### UCL 2.0.0: optional static type checking
 
-Future work is no longer a blank page. `docs/v2-goal.md` defines the
-major version goal: **optional static type annotations and compile-time
-type checking** (`docs/v2-goal.md`). This replaces the pure dynamic-type
-policy guaranteed since `v1.0` (`docs/spec.md` §3, `docs/guarantees.md`).
-The v2 release requires:
-
-- At least one declared `**Breaking**` heading in `CHANGELOG.md`.
-- `docs/guarantees.md` rewritten with the new static-checking contract.
-- `Cargo.toml` bumped to `2.0.0`.
-- `docs/spec.md` updated with type syntax (`int`, `bool`, `string`, `list`,
-  `function`, `unit`, `module`).
-
-The sequential capstone plan (`1.18.0`, `1.19.0`) leading to `v2.0.0`
-is documented in `docs/v1-release-plan.md`.
+UCL 2.0.0 implements optional annotations and compile-time checking. It accepts
+contextual type names (`int`, `bool`, `string`, `list`, `function`, `unit`, and
+`module`) on declarations and function signatures, preserves dynamic semantics
+for unannotated programs, and adds `--type-check` and `--strict-types` modes.
+The release declares its AST, environment-construction, CLI, and static-type
+contract breaks under **Breaking** in `CHANGELOG.md`. The v1 plan remains
+archived in [`v1-release-plan.md`](v1-release-plan.md), and the completed v2
+scope is recorded in [`v2-goal.md`](v2-goal.md).

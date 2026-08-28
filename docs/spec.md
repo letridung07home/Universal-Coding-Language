@@ -1,8 +1,8 @@
 # Universal Coding Language (UCL) — Language Specification
 
-> **Status:** stable as of version 1.2.0. This document specifies the language
-> implemented by the compiler pipeline (lexer → parser → evaluator) and is
-> the normative definition of that language.
+> **Status:** stable as of version 2.0.0. This document specifies the language
+> implemented by the compiler pipeline (lexer → parser → optional type checker
+> → evaluator) and is the normative definition of that language.
 
 ## 1. Overview
 
@@ -107,8 +107,9 @@ literal syntax).
 
 ### 2.8 Punctuation
 
-The characters `( ) { } , ; = + - * / % ^ < > & | ! .` are significant. The
-two-character sequences `<=`, `>=`, `==`, and `!=` are tokenized as single
+The characters `( ) { } , ; : = + - * / % ^ < > & | ! .` are significant. The
+colon introduces an optional type annotation (§3.1). The two-character
+sequences `<=`, `>=`, `==`, and `!=` are tokenized as single
 operator tokens (§4.2), and the two-character sequence `..` is tokenized as a
 range separator, legal only in a `for` header (§5.4). Any other ASCII
 punctuation character is tokenized as punctuation; one that no parser
@@ -131,9 +132,39 @@ error and skipped, so scanning continues after it.
 | `list`    | An ordered, immutable sequence of values. | `[1, 2, 3]`, `[]` |
 | `function` | A callable with positional parameters. | `fn add(a, b) { a + b; }`, `fn(n) { n; }` |
 
-UCL is **dynamically typed**. Values carry runtime types and operators
-validate their operands when evaluated; UCL performs no static type checking,
-type annotations, or inference.
+UCL is **dynamically typed by default**. Values carry runtime types and
+operators validate their operands when evaluated. Version 2.0.0 adds optional
+static annotations that let UCL reject provable type mismatches before
+evaluation; unannotated source retains dynamic behavior.
+
+### 3.1 Optional static annotations
+
+```
+type-name        ::= "int" | "bool" | "string" | "list"
+                   | "function" | "unit" | "module"
+type-annotation  ::= ":" type-name
+```
+
+Annotations are accepted after a declaration name, after a function parameter
+name, and after a function parameter list as a return type:
+
+```ucl
+let answer: int = 42;
+fn twice(value: int): int { value + value; };
+```
+
+A source unit containing an annotation is statically checked before evaluation.
+The checker validates known declaration initializers and assignments, unary and
+binary operators, boolean conditions, range bounds, index expressions, member
+access, calls to declared typed functions, supported built-ins, explicit
+returns, and implicit function results. When information is unavailable, the
+checker preserves dynamic behavior rather than inferring an unsound type.
+
+The words in `type-name` are contextual rather than reserved: `let int = 42;`
+remains legal because `int` is a type name only immediately after `:`.
+`ucl --strict-types` requires every function to provide a complete parameter and
+return annotation signature. `ucl --type-check` performs checking without
+evaluating the source.
 
 UCL also provides a small built-in prelude. Its bindings resolve after every
 user scope, so a declaration in any user scope may shadow a built-in without
@@ -451,24 +482,29 @@ are permitted and ignored.
 ### 5.1 Declaration
 
 ```
-declaration ::= "let" identifier "=" expression
+declaration ::= "let" identifier type-annotation? "=" expression
 ```
 
 A declaration evaluates its initializer and binds the identifier to the
-result in the innermost enclosing scope. The declaration itself evaluates to
-`unit`. Redeclaring a name in the same scope shadows the earlier binding; the
+result in the innermost enclosing scope. When it has an annotation, its
+initializer must statically match that type before evaluation begins. The
+declaration itself evaluates to `unit`. Redeclaring a name in the same scope shadows the earlier binding; the
 earlier binding remains intact in outer scopes.
 
 ### 5.2 Function declaration
 
 ```
-function-declaration ::= "fn" identifier "(" parameter-list? ")" block
-parameter-list       ::= identifier ("," identifier)*
+function-declaration ::= "fn" identifier "(" parameter-list? ")"
+                        type-annotation? block
+parameter-list       ::= parameter ("," parameter)*
+parameter            ::= identifier type-annotation?
 ```
 
 A function declaration may appear in any scope. It binds the declared
 identifier to a function value and itself evaluates to `unit`. Parameter names
-must be unique. A declaration inside a block or function body additionally
+must be unique. Parameter annotations constrain calls to a statically known
+function; a return annotation constrains every explicit return and the implicit
+final expression. A declaration inside a block or function body additionally
 captures the enclosing non-global bindings, like a literal (§4.4).
 
 ### 5.3 Return statement
@@ -588,7 +624,9 @@ empty.
 
 1. The source is tokenized (lexer).
 2. The tokens are parsed into an abstract syntax tree (parser).
-3. The tree is evaluated (evaluator).
+3. Source with annotations, or source run with `--strict-types`, is statically
+   checked before execution (type checker).
+4. A successfully checked tree is evaluated (evaluator).
 
 A program's value is the value of its last statement, or `unit` if the program
 is empty. If any stage of the pipeline reports an error, no value is produced:
@@ -623,7 +661,11 @@ source span. Errors include:
   cumulative iteration budget;
 - constructing a string value larger than the 8 MiB UTF-8 byte limit;
 - a function call exceeding the maximum active-call depth (currently 128);
-- expression nesting that exceeds the parser's or evaluator's depth limit.
+- expression nesting that exceeds the parser's or evaluator's depth limit;
+- a static declaration, operator, call, condition, index, return, or supported
+  built-in mismatch in annotated or strict source; and
+- an annotated or strict source that exceeds the 1,000,000-node static
+  type-checking budget.
 
 The parser rejects expressions nested more than a fixed depth (currently 256
 levels) to prevent stack overflow on pathological input. The evaluator
@@ -640,5 +682,5 @@ evaluation stops. Diagnostics are rendered with a source excerpt pointing at
 the offending span.
 
 Each pipeline stage runs only if the previous stage completed without errors:
-a program with lexical errors is not parsed, and one with syntax errors is not
-evaluated.
+a program with lexical errors is not parsed, one with syntax errors is not
+checked or evaluated, and one with static type errors is not evaluated.

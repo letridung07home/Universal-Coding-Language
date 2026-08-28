@@ -125,7 +125,7 @@ fn is_meta_command(line: &str) -> bool {
 /// Builds a fresh session environment with the given module search paths
 /// plus any `UCL_PATH` directories from the process environment.
 fn fresh_environment(search_paths: &[String]) -> Environment {
-    let mut environment = Environment::new();
+    let mut environment = Environment::default();
     for dir in search_paths {
         environment.add_search_path(dir);
     }

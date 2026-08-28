@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 # Verify that release metadata stays synchronized with Cargo package metadata.
-# Final-v1 documentation and compatibility checks apply only to the 1.x line.
+# Major-version documentation and compatibility checks keep active contracts aligned.
 # This script intentionally uses only POSIX shell tools available in CI.
 set -eu
 
@@ -49,9 +49,13 @@ if [ "$major" = "1" ]; then
     if printf '%s\n' "$release_notes" | grep -E '^#{2,6}[[:space:]]+Breaking([[:space:]]|$)' >/dev/null; then
         fail "the $version changelog entry declares a breaking change"
     fi
-
     grep -F "version $version" docs/guarantees.md >/dev/null || fail "guarantees.md does not identify version $version"
     grep -F "Current version:** \`$version\`" docs/v1-release-plan.md >/dev/null || fail "v1 release plan is not updated to $version"
+    grep -F "UCL $version" docs/roadmap.md >/dev/null || fail "roadmap.md does not record UCL $version"
+elif [ "$major" = "2" ]; then
+    printf '%s\n' "$release_notes" | grep -E '^#{2,6}[[:space:]]+Breaking([[:space:]]|$)' >/dev/null || fail "the $version changelog entry must declare breaking changes"
+    grep -F "\`$version\`" docs/guarantees.md >/dev/null || fail "guarantees.md does not identify version $version"
+    grep -F "Released version:** \`$version\`" docs/v2-goal.md >/dev/null || fail "v2 goal is not finalized for $version"
     grep -F "UCL $version" docs/roadmap.md >/dev/null || fail "roadmap.md does not record UCL $version"
 fi
 

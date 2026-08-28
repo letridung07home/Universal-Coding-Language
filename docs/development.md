@@ -17,6 +17,8 @@ Build and run the interpreter:
 cargo build
 cargo run -- example.ucl
 cargo run -- --list-imports -p ./lib example.ucl
+cargo run -- --type-check example.ucl
+cargo run -- --strict-types example.ucl
 cargo build --release --locked
 ```
 
@@ -39,23 +41,24 @@ cargo test --all-features
 The CI workflow runs formatting, linting, tests, the release-metadata audit, a
 warning-free documentation build, a fuzz-target compilation check, and a locked
 release build. The metadata audit verifies that the Cargo version, both
-workspace lockfiles, changelog, and final-v1 documentation remain synchronized.
+workspace lockfiles, changelog, README, and the active major-version
+compatibility documents remain synchronized.
 
 ## Project architecture
 
 The interpreter uses a staged pipeline:
 
 ```text
-source text -> lexer -> parser -> evaluator
+source text -> lexer -> parser -> optional type checker -> evaluator
 ```
 
 - `source.rs` owns source text and byte spans.
 - `diagnostic.rs` collects structured errors, warnings, and notes.
 - `lexer.rs` converts source text into tokens.
 - `parser.rs` converts tokens into an abstract syntax tree.
-- `evaluator/` executes the abstract syntax tree (`mod.rs` holds the core
-  evaluator, `value.rs` the runtime values, `environment.rs` lexical scopes,
-  and `builtins.rs` the prelude).
+- `evaluator/` checks and executes the abstract syntax tree (`typecheck.rs`
+  holds optional static checking, `mod.rs` the evaluator, `value.rs` runtime
+  values, `environment.rs` lexical scopes, and `builtins.rs` the prelude).
 - `module.rs` owns `use` imports: path resolution, cycle detection,
   evaluation isolation, binding merges, and the read-only resolved-import
   traversal used by `ucl --list-imports`.
@@ -112,18 +115,19 @@ implementation and specification remain synchronized.
 
 ## Release boundary
 
-UCL `1.19.0` is the final stable v1 release. The v1 language, command-line
-interface, public library API, diagnostics, formatter, module resolution, and
-resource safeguards remain governed by [`guarantees.md`](guarantees.md). Any
-change that breaks those promises belongs in the explicitly breaking, still
-draft [v2.0.0 static-type-checking plan](v2-goal.md), rather than a v1 patch or
-minor release.
+UCL `2.0.0` is the active major release. Its optional annotation syntax,
+static-checking behavior, public typing API, CLI modes, formatter behavior,
+module resolution, and resource safeguards are governed by
+[`guarantees.md`](guarantees.md). The final v1 contract is retained in
+[`v1-guarantees.md`](v1-guarantees.md) for historical compatibility review.
 
-Before publishing a v1 release candidate, run
+Before publishing a release candidate, run
 `./scripts/check-release-metadata.sh` after updating `Cargo.toml`; update both
-workspace lockfiles with Cargo rather than editing them manually. The script is
-intentionally part of CI so a tag-triggered release cannot package mismatched
-version metadata.
+workspace lockfiles with Cargo rather than editing them manually. For a major
+release, also record every compatibility break under a **Breaking** heading in
+`CHANGELOG.md` and synchronize the active goal and guarantees documents. The
+script is intentionally part of CI so a tag-triggered release cannot package
+mismatched version metadata.
 
 ## Licensing contributions
 

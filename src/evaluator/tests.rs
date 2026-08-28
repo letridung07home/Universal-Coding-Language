@@ -1909,7 +1909,7 @@ fn caps_recursive_function_calls() {
 #[test]
 fn evaluate_in_persists_global_bindings_across_calls() {
     let evaluator = Evaluator::new();
-    let mut environment = Environment::new();
+    let mut environment = Environment::default();
 
     for (input, expected) in [("let x = 40;", None), ("x + 2;", Some(Value::Integer(42)))] {
         let line_source = SourceFile::new("repl.ucl", input);
@@ -1932,7 +1932,7 @@ fn evaluate_in_persists_global_bindings_across_calls() {
 fn evaluate_in_keeps_functions_and_their_captures_alive() {
     let mut sink = DiagnosticSink::new();
     let evaluator = Evaluator::new();
-    let mut environment = Environment::new();
+    let mut environment = Environment::default();
 
     let run_line = |evaluator: &Evaluator,
                     environment: &mut Environment,
@@ -1975,7 +1975,7 @@ fn evaluate_in_keeps_functions_and_their_captures_alive() {
 fn an_error_on_one_line_does_not_poison_the_next() {
     let mut sink = DiagnosticSink::new();
     let evaluator = Evaluator::new();
-    let mut environment = Environment::new();
+    let mut environment = Environment::default();
 
     let run_line = |evaluator: &Evaluator,
                     environment: &mut Environment,
