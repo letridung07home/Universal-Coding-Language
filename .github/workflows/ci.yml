@@ -41,9 +41,8 @@ jobs:
           cargo test --all-features 2>&1 | tee /tmp/tests.txt
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
-            sed 's/\x1b\[[0-9;]*m//g' /tmp/tests.txt | grep -E "FAILED|panicked|assertion|failures:|left:|right:|error\[|^error" | head -60 | while IFS= read -r line; do
-              echo "::error::${line}"
-            done
+            tail -c 8000 /tmp/tests.txt | python3 -c 'import sys, urllib.parse; sys.stdout.write("::error::raw=" + urllib.parse.quote(sys.stdin.read(), safe=""))'
+            echo
           fi
           exit "$status"
 
