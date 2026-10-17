@@ -74,10 +74,10 @@ impl MapValue {
         };
         for (key, value) in entries {
             let key = MapKey::from_value(&key)?;
-            if map.index.contains_key(&key) {
+            let position = map.entries.len();
+            if map.index.insert(key.clone(), position).is_some() {
                 return None;
             }
-            map.index.insert(key.clone(), map.entries.len());
             map.entries.push((key, value));
         }
         Some(map)
