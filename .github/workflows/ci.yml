@@ -36,7 +36,16 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Run tests
-        run: cargo test --all-features
+        run: |
+          set +e
+          cargo test --all-features 2>&1 | tee /tmp/tests.txt
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            grep -E "^(test .* FAILED|failures:|    [a-z_]+::|thread .* panicked|assertion|left:|right:)" /tmp/tests.txt | head -60 | while IFS= read -r line; do
+              echo "::error::${line}"
+            done
+          fi
+          exit "$status"
 
       - name: Check release metadata
         run: ./scripts/check-release-metadata.sh
