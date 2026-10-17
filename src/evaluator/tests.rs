@@ -2349,6 +2349,7 @@ fn reports_map_builtin_arity_and_type_errors() {
     ] {
         let (value, sink) = eval(source);
         assert_eq!(value, None, "expected an error for `{source}`");
+        assert!(sink.has_errors(), "for `{source}`");
     }
 }
 
@@ -2394,10 +2395,13 @@ fn map_insert_accumulation_is_linear_through_the_fast_path() {
 
 #[test]
 fn map_insert_charges_aliased_copies() {
-    // Aliasing inside the loop forces a full copy per iteration; the
-    // budget charges each copy and stops the loop early.
-    let (value, sink) =
-        eval("let m = #{\"k\": 0}; while true { let alias = m; m = insert(m, \"k\", 1); };");
+    // Aliasing inside the loop forces a full copy per iteration; the map
+    // grows each round so the charged copies reach the allocation budget
+    // before the per-loop iteration cap. The key stays a plain variable so
+    // the accumulator fast path applies and charges the aliased copy.
+    let (value, sink) = eval(
+        "let m = #{}; let k = 0; while true { let alias = m; m = insert(m, k, 1); k = k + 1; };",
+    );
     assert!(sink.iter().any(|diagnostic| {
         diagnostic
             .message
