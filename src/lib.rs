@@ -18,8 +18,8 @@ pub mod source;
 
 pub use diagnostic::{Diagnostic, DiagnosticSink, Severity};
 pub use evaluator::{
-    BuiltinFunction, Environment, Evaluator, ModuleValue, Type, TypeContext, Value,
+    BuiltinFunction, Environment, Evaluator, MapValue, ModuleValue, Type, TypeContext, Value,
 };
 pub use lexer::{Keyword, Lexer, Token, TokenKind, TypeName};
-pub use parser::{AstKind, AstNode, BinaryOperator, Parameter, Parser, TypeAnnotation};
+pub use parser::{AstKind, AstNode, BinaryOperator, MapEntry, Parameter, Parser, TypeAnnotation};
 pub use source::{BytePos, SourceFile, Span};

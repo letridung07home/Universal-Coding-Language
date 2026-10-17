@@ -26,7 +26,7 @@ use std::rc::Rc;
 
 use crate::diagnostic::{Diagnostic, DiagnosticSink, Severity};
 use crate::lexer::unescape_string;
-use crate::parser::{AstKind, AstNode, BinaryOperator, Parameter};
+use crate::parser::{AstKind, AstNode, BinaryOperator, MapEntry, Parameter};
 use crate::source::{SourceFile, Span};
 
 mod builtins;
@@ -39,7 +39,7 @@ mod value;
 pub use builtins::BuiltinFunction;
 pub use environment::Environment;
 pub use typecheck::{Type, TypeContext};
-pub use value::{FunctionValue, ModuleValue, Value};
+pub use value::{FunctionValue, MapValue, ModuleValue, Value};
 /// The maximum evaluation-nesting depth allowed before an error is reported.
 ///
 /// This guards against deeply nested ASTs constructed through the public API
@@ -359,6 +359,9 @@ impl Evaluator {
                 }
                 Value::List(Rc::new(values))
             }
+            AstKind::Map { entries } => {
+                self.eval_map_literal(node, entries, source, environment, sink, depth)
+            }
             AstKind::Let { name, value, .. } => {
                 // Spans come from the parser and are valid there, but ASTs
                 // can also be constructed through the public API with
@@ -623,6 +626,27 @@ impl Evaluator {
         let object_span = object.span;
         let object = self.eval(object, source, environment, sink, depth + 1);
         let index_value = self.eval(index, source, environment, sink, depth + 1);
+        if let Value::Map(map) = &object {
+            // Maps index by key: strings and integers, unlike the positional
+            // integer indices of lists and strings.
+            if !Self::is_map_key(&index_value) {
+                sink.emit(
+                    Diagnostic::error(format!(
+                        "map key must be a string or an integer, found `{}`",
+                        index_value.type_name()
+                    ))
+                    .at(index.span),
+                );
+                return Value::Unit;
+            }
+            return match map.get(&index_value) {
+                Some(value) => value.clone(),
+                None => {
+                    sink.emit(Diagnostic::error("map key not found").at(node.span));
+                    Value::Unit
+                }
+            };
+        }
         let Value::Integer(i) = index_value else {
             sink.emit(
                 Diagnostic::error(format!(
@@ -665,6 +689,70 @@ impl Evaluator {
                 Value::Unit
             }
         }
+    }
+
+    /// Evaluates a map literal `#{ key: value, ... }`.
+    ///
+    /// Keys and values evaluate left to right. Keys must be strings or
+    /// integers and may not repeat within one literal; a repeated key is an
+    /// error rather than a silent last-one-wins update, keeping literals
+    /// honest and `insert` the single update path.
+    #[allow(clippy::too_many_arguments)]
+    fn eval_map_literal(
+        &self,
+        node: &AstNode,
+        entries: &[MapEntry],
+        source: &SourceFile,
+        environment: &mut Environment,
+        sink: &mut DiagnosticSink,
+        depth: usize,
+    ) -> Value {
+        let mut seen = Vec::with_capacity(entries.len());
+        let mut pairs = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let key = self.eval(&entry.key, source, environment, sink, depth + 1);
+            if self.has_pending_flow() || self.resource_exhausted.get() || sink.is_full() {
+                return Value::Unit;
+            }
+            if !Self::is_map_key(&key) {
+                sink.emit(
+                    Diagnostic::error(format!(
+                        "map key must be a string or an integer, found `{}`",
+                        key.type_name()
+                    ))
+                    .at(entry.key.span),
+                );
+                return Value::Unit;
+            }
+            if seen.contains(&key) {
+                sink.emit(
+                    Diagnostic::error(format!("duplicate map key {}", key.element_text()))
+                        .at(entry.key.span),
+                );
+                return Value::Unit;
+            }
+            seen.push(key.clone());
+            let value = self.eval(&entry.value, source, environment, sink, depth + 1);
+            if self.has_pending_flow() || self.resource_exhausted.get() || sink.is_full() {
+                return Value::Unit;
+            }
+            pairs.push((key, value));
+        }
+        match MapValue::from_entries(pairs) {
+            Some(map) => Value::Map(Rc::new(map)),
+            None => {
+                // The loop above already validated every key, so this is
+                // reachable only through hand-built ASTs; report rather
+                // than panic, like every other span-validation failure.
+                sink.emit(Diagnostic::error("map literal has an invalid key").at(node.span));
+                Value::Unit
+            }
+        }
+    }
+
+    /// Returns whether `value` is a legal map key: a string or an integer.
+    fn is_map_key(value: &Value) -> bool {
+        matches!(value, Value::Str(_) | Value::Integer(_))
     }
 
     /// Evaluates an `if`/`else` conditional. The condition must be a
@@ -818,9 +906,10 @@ impl Evaluator {
         Value::Unit
     }
 
-    /// Evaluates a `for` loop over a range, string, or list. The iteration
-    /// sequence is fixed before the first pass: range bounds are read once,
-    /// and a string yields its scalar values as one-character strings.
+    /// Evaluates a `for` loop over a range, string, list, or map. The
+    /// iteration sequence is fixed before the first pass: range bounds are
+    /// read once, a string yields its scalar values as one-character
+    /// strings, and a map yields its keys in insertion order.
     #[allow(clippy::too_many_arguments)]
     fn eval_for(
         &self,
@@ -889,10 +978,15 @@ impl Evaluator {
                             .collect(),
                     )
                 }
+                Value::Map(map) => {
+                    // Maps iterate their keys in insertion order, matching
+                    // `keys(map)`; one extra key keeps the cap check honest.
+                    Some(map.keys().take(MAX_LOOP_ITERATIONS as usize + 1).collect())
+                }
                 other => {
                     sink.emit(
                         Diagnostic::error(format!(
-                            "`for` cannot iterate over `{}`, expected a string or range",
+                            "`for` cannot iterate over `{}`, expected a string, list, map, or range",
                             other.type_name()
                         ))
                         .at(end.span),
@@ -1110,6 +1204,54 @@ impl Evaluator {
                 return value;
             }
         }
+        // Map fast paths: `name = insert(name, <pure>, <pure>)` and
+        // `name = remove(name, <pure>)`.
+        if let AstKind::Call { callee, arguments } = &value.kind
+            && matches!(callee.kind, AstKind::Identifier)
+            && matches!(
+                arguments.first().map(|argument| &argument.kind),
+                Some(AstKind::Identifier)
+            )
+            && source.slice(arguments[0].span) == Some(name.as_str())
+            && environment.lookup(&name).is_some()
+        {
+            let pure_rest = arguments[1..]
+                .iter()
+                .all(|argument| !Self::may_mutate_bindings(argument));
+            if pure_rest
+                && arguments.len() == 3
+                && source.slice(callee.span) == Some(BuiltinFunction::Insert.name())
+            {
+                if let Some(value) = self.try_map_insert_in_place(
+                    &name,
+                    value.span,
+                    &arguments[1],
+                    &arguments[2],
+                    source,
+                    environment,
+                    sink,
+                    depth,
+                ) {
+                    return value;
+                }
+            }
+            if pure_rest
+                && arguments.len() == 2
+                && source.slice(callee.span) == Some(BuiltinFunction::Remove.name())
+            {
+                if let Some(value) = self.try_map_remove_in_place(
+                    &name,
+                    value.span,
+                    &arguments[1],
+                    source,
+                    environment,
+                    sink,
+                    depth,
+                ) {
+                    return value;
+                }
+            }
+        }
         let value = self.eval(value, source, environment, sink, depth + 1);
         if !environment.assign(&name, value.clone()) {
             sink.emit(
@@ -1143,6 +1285,11 @@ impl Evaluator {
             | BuiltinFunction::Find
             | BuiltinFunction::Slice
             | BuiltinFunction::Append => self.eval_collection_builtin(builtin, values, span, sink),
+            BuiltinFunction::Keys
+            | BuiltinFunction::Values
+            | BuiltinFunction::Get
+            | BuiltinFunction::Insert
+            | BuiltinFunction::Remove => self.eval_map_builtin(builtin, values, span, sink),
         }
     }
 
@@ -1163,10 +1310,11 @@ impl Evaluator {
                 match &values[0] {
                     Value::Str(value) => Value::Integer(value.chars().count() as i64),
                     Value::List(elements) => Value::Integer(elements.len() as i64),
+                    Value::Map(map) => Value::Integer(map.len() as i64),
                     other => {
                         sink.emit(
                             Diagnostic::error(format!(
-                                "`len` expects a string or list argument, found `{}`",
+                                "`len` expects a string, list, or map argument, found `{}`",
                                 other.type_name()
                             ))
                             .at(span),
@@ -1389,9 +1537,15 @@ impl Evaluator {
                     // lists.
                     return Value::Boolean(elements.iter().any(|element| element == needle));
                 }
+                if let Value::Map(map) = haystack {
+                    // Map membership tests keys, mirroring `map[key]`
+                    // lookup: `contains(m, k)` reports whether `m[k]` would
+                    // find a value.
+                    return Value::Boolean(map.contains_key(needle));
+                }
                 sink.emit(
                     Diagnostic::error(format!(
-                        "`contains` expects a string or list haystack, found `{}`",
+                        "`contains` expects a string, list, or map haystack, found `{}`",
                         haystack.type_name()
                     ))
                     .at(span),
@@ -1547,6 +1701,157 @@ impl Evaluator {
         }
     }
 
+    /// Evaluates the map built-ins: `keys`, `values`, `get`, `insert`, and
+    /// `remove`. The functional updates copy on write through
+    /// [`Rc::make_mut`], keeping the accumulate-in-a-loop idioms
+    /// (`m = insert(m, k, v)`, `m = remove(m, k)`) linear in total work when
+    /// the binding is unaliased.
+    fn eval_map_builtin(
+        &self,
+        builtin: BuiltinFunction,
+        values: &[Value],
+        span: Span,
+        sink: &mut DiagnosticSink,
+    ) -> Value {
+        match builtin {
+            BuiltinFunction::Keys | BuiltinFunction::Values => {
+                let name = builtin.name();
+                if !Self::check_arity(name, values, 1, span, sink) {
+                    return Value::Unit;
+                }
+                let Value::Map(map) = &values[0] else {
+                    sink.emit(
+                        Diagnostic::error(format!(
+                            "`{name}` expects a map argument, found `{}`",
+                            values[0].type_name()
+                        ))
+                        .at(span),
+                    );
+                    return Value::Unit;
+                };
+                let items: Vec<Value> = match builtin {
+                    BuiltinFunction::Keys => map.keys().collect(),
+                    _ => map.values().collect(),
+                };
+                // Result-sized charge, matching `slice`: the built-in copies
+                // one list of exactly the map's entry count.
+                if !self.charge_allocation(items.len(), span, sink) {
+                    return Value::Unit;
+                }
+                Value::List(Rc::new(items))
+            }
+            BuiltinFunction::Get => {
+                if values.len() != 2 && values.len() != 3 {
+                    sink.emit(
+                        Diagnostic::error(format!(
+                            "`get` expected 2 or 3 argument(s), received {}",
+                            values.len()
+                        ))
+                        .at(span),
+                    );
+                    return Value::Unit;
+                }
+                let Value::Map(map) = &values[0] else {
+                    sink.emit(
+                        Diagnostic::error(format!(
+                            "`get` expects a map argument, found `{}`",
+                            values[0].type_name()
+                        ))
+                        .at(span),
+                    );
+                    return Value::Unit;
+                };
+                if !Self::is_map_key(&values[1]) {
+                    sink.emit(
+                        Diagnostic::error(format!(
+                            "map key must be a string or an integer, found `{}`",
+                            values[1].type_name()
+                        ))
+                        .at(span),
+                    );
+                    return Value::Unit;
+                }
+                match map.get(&values[1]) {
+                    Some(value) => value.clone(),
+                    None => values.get(2).cloned().unwrap_or(Value::Unit),
+                }
+            }
+            BuiltinFunction::Insert => {
+                if !Self::check_arity(BuiltinFunction::Insert.name(), values, 3, span, sink) {
+                    return Value::Unit;
+                }
+                let Value::Map(map) = &values[0] else {
+                    sink.emit(
+                        Diagnostic::error(format!(
+                            "`insert` expects a map argument, found `{}`",
+                            values[0].type_name()
+                        ))
+                        .at(span),
+                    );
+                    return Value::Unit;
+                };
+                if !Self::is_map_key(&values[1]) {
+                    sink.emit(
+                        Diagnostic::error(format!(
+                            "map key must be a string or an integer, found `{}`",
+                            values[1].type_name()
+                        ))
+                        .at(span),
+                    );
+                    return Value::Unit;
+                }
+                // Functional: the result is a map with the entry added or
+                // replaced and the original is untouched. Growth-based
+                // charge, matching `append`.
+                if !self.charge_allocation(1, span, sink) {
+                    return Value::Unit;
+                }
+                let mut updated = Rc::clone(map);
+                let inserted = Rc::make_mut(&mut updated).insert_in(&values[1], values[2].clone());
+                debug_assert!(inserted, "map keys were validated above");
+                Value::Map(updated)
+            }
+            BuiltinFunction::Remove => {
+                if !Self::check_arity(BuiltinFunction::Remove.name(), values, 2, span, sink) {
+                    return Value::Unit;
+                }
+                let Value::Map(map) = &values[0] else {
+                    sink.emit(
+                        Diagnostic::error(format!(
+                            "`remove` expects a map argument, found `{}`",
+                            values[0].type_name()
+                        ))
+                        .at(span),
+                    );
+                    return Value::Unit;
+                };
+                if !Self::is_map_key(&values[1]) {
+                    sink.emit(
+                        Diagnostic::error(format!(
+                            "map key must be a string or an integer, found `{}`",
+                            values[1].type_name()
+                        ))
+                        .at(span),
+                    );
+                    return Value::Unit;
+                }
+                if !map.contains_key(&values[1]) {
+                    sink.emit(Diagnostic::error("map key not found").at(span));
+                    return Value::Unit;
+                }
+                if !self.charge_allocation(1, span, sink) {
+                    return Value::Unit;
+                }
+                let mut updated = Rc::clone(map);
+                let removed = Rc::make_mut(&mut updated).remove_in(&values[1]);
+                debug_assert!(removed, "map keys were validated above");
+                Value::Map(updated)
+            }
+            // `eval_builtin` routes every built-in to exactly one category,
+            // so no other variant can reach this match.
+            _ => unreachable!("built-in routed to the wrong category"),
+        }
+    }
     /// Checks that a built-in call received exactly `expected` arguments,
     /// emitting an arity error and returning false otherwise.
     fn check_arity(
@@ -1705,8 +2010,9 @@ impl Evaluator {
             }
             Equal | NotEqual => {
                 // Equality is defined for two integers, two booleans, two
-                // strings, or two lists (compared element by element);
-                // comparing values of different types is an error.
+                // strings, two lists (compared element by element), or two
+                // maps (compared key to value); comparing values of
+                // different types is an error.
                 match (left, right) {
                     (Value::Integer(a), Value::Integer(b)) => {
                         Value::Boolean(if operator == Equal { a == b } else { a != b })
@@ -1720,6 +2026,11 @@ impl Evaluator {
                     (Value::List(a), Value::List(b)) => {
                         // `Vec`'s equality compares element by element,
                         // recursing through nested lists.
+                        Value::Boolean(if operator == Equal { a == b } else { a != b })
+                    }
+                    (Value::Map(a), Value::Map(b)) => {
+                        // Map equality ignores insertion order: the same
+                        // keys mapped to equal values are equal maps.
                         Value::Boolean(if operator == Equal { a == b } else { a != b })
                     }
                     (l, r) => binary_type_error(operator, &l, &r, span, sink),
@@ -1851,6 +2162,9 @@ impl Evaluator {
             }
             AstKind::Group { expression } => Self::may_mutate_bindings(expression),
             AstKind::List { elements } => elements.iter().any(Self::may_mutate_bindings),
+            AstKind::Map { entries } => entries.iter().any(|entry| {
+                Self::may_mutate_bindings(&entry.key) || Self::may_mutate_bindings(&entry.value)
+            }),
             AstKind::Index { object, index } => {
                 Self::may_mutate_bindings(object) || Self::may_mutate_bindings(index)
             }
@@ -2008,6 +2322,105 @@ impl Evaluator {
             return Some(Value::Unit);
         }
         Rc::make_mut(elements).extend(appended);
+        Some(slot.clone())
+    }
+
+    /// Inserts an entry into a map binding in place for
+    /// `name = insert(name, key_expr, value_expr)`.
+    ///
+    /// Mirrors [`Evaluator::try_list_append_in_place`]: when the binding's
+    /// map is uniquely owned the update reuses its buffer and charges only
+    /// the new entry; when it may be aliased, `Rc::make_mut` copies
+    /// transparently and the budget is charged the copy. Returns `None` —
+    /// deferring to the general assignment path with unchanged diagnostics —
+    /// whenever the shape or types do not match; re-evaluating the arguments
+    /// there is safe because they cannot mutate bindings.
+    #[allow(clippy::too_many_arguments)]
+    fn try_map_insert_in_place(
+        &self,
+        name: &str,
+        expression_span: Span,
+        key_expression: &AstNode,
+        value_expression: &AstNode,
+        source: &SourceFile,
+        environment: &mut Environment,
+        sink: &mut DiagnosticSink,
+        depth: usize,
+    ) -> Option<Value> {
+        let key = self.eval(key_expression, source, environment, sink, depth + 1);
+        let value = self.eval(value_expression, source, environment, sink, depth + 1);
+        if self.has_pending_flow() || self.resource_exhausted.get() || sink.is_full() {
+            return Some(Value::Unit);
+        }
+        if !Self::is_map_key(&key) {
+            return None;
+        }
+        let slot = environment
+            .scopes
+            .iter_mut()
+            .rev()
+            .find_map(|scope| scope.get_mut(name))?;
+        let Value::Map(map) = slot else {
+            return None;
+        };
+        let charge = if Rc::strong_count(map) == 1 {
+            1
+        } else {
+            map.len().saturating_add(1)
+        };
+        if !self.charge_allocation(charge, expression_span, sink) {
+            return Some(Value::Unit);
+        }
+        let inserted = Rc::make_mut(map).insert_in(&key, value);
+        debug_assert!(inserted, "map keys were validated above");
+        Some(slot.clone())
+    }
+
+    /// Removes an entry from a map binding in place for
+    /// `name = remove(name, key_expr)`.
+    ///
+    /// Mirrors [`Evaluator::try_map_insert_in_place`] with the same
+    /// ownership, charging, and fallback rules; a missing key defers to the
+    /// general path, which reports it.
+    #[allow(clippy::too_many_arguments)]
+    fn try_map_remove_in_place(
+        &self,
+        name: &str,
+        expression_span: Span,
+        key_expression: &AstNode,
+        source: &SourceFile,
+        environment: &mut Environment,
+        sink: &mut DiagnosticSink,
+        depth: usize,
+    ) -> Option<Value> {
+        let key = self.eval(key_expression, source, environment, sink, depth + 1);
+        if self.has_pending_flow() || self.resource_exhausted.get() || sink.is_full() {
+            return Some(Value::Unit);
+        }
+        if !Self::is_map_key(&key) {
+            return None;
+        }
+        let slot = environment
+            .scopes
+            .iter_mut()
+            .rev()
+            .find_map(|scope| scope.get_mut(name))?;
+        let Value::Map(map) = slot else {
+            return None;
+        };
+        if !map.contains_key(&key) {
+            return None;
+        }
+        let charge = if Rc::strong_count(map) == 1 {
+            1
+        } else {
+            map.len()
+        };
+        if !self.charge_allocation(charge, expression_span, sink) {
+            return Some(Value::Unit);
+        }
+        let removed = Rc::make_mut(map).remove_in(&key);
+        debug_assert!(removed, "map keys were validated above");
         Some(slot.clone())
     }
 }

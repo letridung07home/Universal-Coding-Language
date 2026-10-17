@@ -1,7 +1,7 @@
 # UCL v2.0.0: Optional Static Type Checking
 
 **Initial release:** `2.0.0`
-**Current v2 release:** `2.1.0`
+**Current v2 release:** `2.2.0`
 **Status:** Implemented and maintained
 **Branch:** `main`
 
@@ -19,8 +19,8 @@ annotated source is validated before it runs.
 
 ## Syntax and checking model
 
-The seven contextual source type names are `int`, `bool`, `string`, `list`,
-`function`, `unit`, and `module`. A type name is special only after `:`, so
+The eight contextual source type names are `int`, `bool`, `string`, `list`,
+`map`, `function`, `unit`, and `module`. A type name is special only after `:`, so
 `let int = 42;` remains legal v1-compatible source.
 
 ```ucl
@@ -96,3 +96,18 @@ deduplicates shared modules, and lexes, parses, and statically checks every
 unique source file without executing program code. The command supports the
 same `-p/--path` and `UCL_PATH` search behavior as normal module resolution and
 can opt into complete-signature enforcement with `--strict-types`.
+
+## UCL 2.2.0: map values
+
+UCL 2.2.0 adds map values, the last missing aggregate alongside lists.
+`#{ key: value }` literals build immutable maps from string or integer keys
+(keys may be arbitrary expressions), entries are kept in insertion order, and
+`#{}` is the empty map. `map[key]` looks keys up strictly — a missing key is a
+runtime error like a list index out of range — `==` and `!=` compare maps by
+their keys and values regardless of order, and `for key in map` iterates keys
+in insertion order. The functional toolkit `keys`, `values`, `get`, `insert`,
+and `remove` builds maps programmatically without mutation, `len`/`contains`/
+`type`/`str` treat maps as first-class, and `map` joins the contextual type
+names. Map updates share storage behind `Rc` and take in-place fast paths, so
+`m = insert(m, k, v)` accumulation is linear in total work exactly like
+`append`, with aliasing still forcing copies under the same allocation budget.

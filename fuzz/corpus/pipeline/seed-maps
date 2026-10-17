@@ -1,0 +1,1 @@
+let m = #{"a": 1, 2: [3]}; for k in m { get(m, k); }; let n = insert(remove(m, "a"), "c", #{}); contains(n, "c") & str(n) == str(n) & len(n) == 2 & type(n) == "map";

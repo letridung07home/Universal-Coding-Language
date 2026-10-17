@@ -31,7 +31,7 @@ impl Rng {
 }
 
 /// Characters likely to exercise interesting formatter paths.
-const ALPHABET: &str = "abcxyz01+-*/%^<>&|!=;,(){}[] \t\n\"\\//letifnrfswuh";
+const ALPHABET: &str = "abcxyz01+-*/%^<>&|!=;,(){}[]#:\t\n\"\\//letifnrfswuh";
 
 fn random_string(rng: &mut Rng) -> String {
     let alphabet: Vec<char> = ALPHABET.chars().collect();
@@ -58,6 +58,10 @@ const CORPUS: &[&str] = &[
     "let xs = [1, [2, 3], \"four\", true]; xs[1][0];",
     "let long = [\n    111111,\n    222222,\n    333333,\n];\nlong[0];",
     "let empty = []; let nested = [[]]; len(empty);",
+    "let m = #{\"a\": 1, 2: \"x\"}; m[\"a\"];",
+    "let empty = #{}; let deep = #{\"m\": #{\"k\": [1, #{}]}}; len(deep);",
+    "let long = #{\n    \"alpha\": 111111,\n    \"beta\": 222222,\n};\nlong[\"alpha\"];",
+    "let m: map = insert(#{}, \"k\", 1); for k in m { get(m, k); };",
     "use \"math.ucl\" as m;\nuse \"util.ucl\";\nm.double(4);",
     "let s = \"tab\\t newline\\n quote\\\" back\\\\\";\ns;",
     "return_statement_free(); fn r() { return; }; r();",

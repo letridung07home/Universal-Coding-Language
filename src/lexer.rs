@@ -17,6 +17,8 @@ pub enum TypeName {
     String,
     /// The immutable list type, written `list`.
     List,
+    /// The immutable map type, written `map`.
+    Map,
     /// The callable function type, written `function`.
     Function,
     /// The unit type, written `unit`.
@@ -33,6 +35,7 @@ impl TypeName {
             "bool" => Some(Self::Boolean),
             "string" => Some(Self::String),
             "list" => Some(Self::List),
+            "map" => Some(Self::Map),
             "function" => Some(Self::Function),
             "unit" => Some(Self::Unit),
             "module" => Some(Self::Module),

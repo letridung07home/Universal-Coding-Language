@@ -44,6 +44,15 @@ pub struct Parameter {
     pub annotation: Option<Box<TypeAnnotation>>,
 }
 
+/// One `key: value` entry in a map literal.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MapEntry {
+    /// The key expression; must evaluate to a string or an integer.
+    pub key: AstNode,
+    /// The value expression.
+    pub value: AstNode,
+}
+
 /// The syntactic constructs currently understood by the parser.
 #[derive(Clone, Debug, PartialEq)]
 pub enum AstKind {
@@ -99,6 +108,15 @@ pub enum AstKind {
     List {
         /// The element expressions in source order.
         elements: Vec<AstNode>,
+    },
+    /// A map literal: `#{}`, `#{"a": 1}`, or `#{key_expr: value_expr}`.
+    ///
+    /// The node's span covers the whole literal including the introducing
+    /// `#{` and the closing `}`. Keys may be arbitrary expressions but must
+    /// evaluate to strings or integers.
+    Map {
+        /// The entries in source order.
+        entries: Vec<MapEntry>,
     },
     /// A parenthesized expression.
     Group {
@@ -698,6 +716,43 @@ impl Parser {
                     AstKind::List { elements },
                 ))
             }
+            // A map literal introduces itself with `#{`, distinct from the
+            // block-opening `{`, so map literals never compete with blocks.
+            TokenKind::Punctuation('#') if self.peek_is_map_open() => {
+                let start = self.advance().span.start;
+                self.advance();
+                let mut entries = Vec::new();
+                if !self.check_punctuation('}') {
+                    loop {
+                        let key = self.parse_expression(0, sink)?;
+                        if !self.consume_punctuation(':') {
+                            self.error_current("expected `:` after the map key", sink);
+                            return None;
+                        }
+                        let value = self.parse_expression(0, sink)?;
+                        entries.push(MapEntry { key, value });
+                        if self.consume_punctuation(',') {
+                            if self.check_punctuation('}') {
+                                break;
+                            }
+                            continue;
+                        }
+                        break;
+                    }
+                }
+                let end = if self.consume_punctuation('}') {
+                    self.tokens[self.cursor - 1].span.end
+                } else {
+                    self.error_current("expected `}` after the map entries", sink);
+                    entries
+                        .last()
+                        .map_or(start + 2, |entry| entry.value.span.end)
+                };
+                Some(AstNode::new(
+                    Span::new(start, end),
+                    AstKind::Map { entries },
+                ))
+            }
             TokenKind::Ident => {
                 self.advance();
                 Some(AstNode::new(token.span, AstKind::Identifier))
@@ -848,7 +903,7 @@ impl Parser {
         let token = *self.tokens.get(self.cursor)?;
         let TokenKind::TypeName(name) = token.kind else {
             self.error_current(
-                "expected a type name after `:` (`int`, `bool`, `string`, `list`, `function`, `unit`, or `module`)",
+                "expected a type name after `:` (`int`, `bool`, `string`, `list`, `map`, `function`, `unit`, or `module`)",
                 sink,
             );
             return None;
@@ -967,6 +1022,16 @@ impl Parser {
         self.tokens
             .get(self.cursor + 1)
             .is_some_and(|token| token.kind == TokenKind::Punctuation('('))
+    }
+
+    /// Returns true if the token after the current one is `{`.
+    ///
+    /// Used to recognize the `#{` map-literal introducer while leaving a
+    /// stray `#` a plain expression error.
+    fn peek_is_map_open(&self) -> bool {
+        self.tokens
+            .get(self.cursor + 1)
+            .is_some_and(|token| token.kind == TokenKind::Punctuation('{'))
     }
 
     /// Returns true if the token after the current one is an identifier.
@@ -1569,6 +1634,89 @@ mod tests {
             let (_ast, sink) = parse(source);
             assert!(sink.has_errors(), "expected an error for `{source}`");
         }
+    }
+
+    #[test]
+    fn parses_map_literals_and_index_expressions() {
+        let (ast, sink) = parse("#{}; #{\"a\": 1, 2: x + 1,}; cache[\"a\"];");
+
+        assert!(!sink.has_errors());
+        let AstKind::Program { statements } = ast.kind else {
+            panic!("expected program");
+        };
+        let AstKind::Map { entries } = &statements[0].kind else {
+            panic!("expected an empty map literal")
+        };
+        assert!(entries.is_empty());
+        let AstKind::Map { entries } = &statements[1].kind else {
+            panic!("expected a map literal")
+        };
+        assert_eq!(entries.len(), 2);
+        assert!(matches!(entries[0].key.kind, AstKind::StringLiteral));
+        assert!(matches!(entries[1].key.kind, AstKind::Integer));
+        assert!(matches!(
+            entries[1].value.kind,
+            AstKind::Binary {
+                operator: BinaryOperator::Add,
+                ..
+            }
+        ));
+        assert!(matches!(statements[2].kind, AstKind::Index { .. }));
+    }
+
+    #[test]
+    fn map_literal_keys_are_arbitrary_expressions() {
+        let (ast, sink) = parse("#{k + \"1\": fn(a) { a; }};");
+
+        assert!(!sink.has_errors());
+        let AstKind::Program { statements } = ast.kind else {
+            panic!("expected program");
+        };
+        let AstKind::Map { entries } = &statements[0].kind else {
+            panic!("expected a map literal")
+        };
+        assert!(matches!(entries[0].key.kind, AstKind::Binary { .. }));
+        assert!(matches!(entries[0].value.kind, AstKind::Function { .. }));
+    }
+
+    #[test]
+    fn reports_malformed_maps() {
+        for source in ["#{1};", "#{\"a\" 1};", "#{\"a\": 1;", "#{,};", "#1;", "# ;"] {
+            let (_ast, sink) = parse(source);
+            assert!(sink.has_errors(), "expected an error for `{source}`");
+        }
+    }
+
+    #[test]
+    fn parses_map_type_annotations_contextually() {
+        let (ast, sink) = parse("let m: map = #{}; fn f(x: map): map { x; }; let map = 42;");
+
+        assert!(!sink.has_errors());
+        let AstKind::Program { statements } = ast.kind else {
+            panic!("expected program");
+        };
+        let AstKind::Let { annotation, .. } = &statements[0].kind else {
+            panic!("expected a let declaration")
+        };
+        assert_eq!(annotation.as_deref().map(|a| a.name), Some(TypeName::Map));
+        let AstKind::Function {
+            parameters,
+            return_type,
+            ..
+        } = &statements[1].kind
+        else {
+            panic!("expected a function declaration")
+        };
+        assert_eq!(
+            parameters[0].annotation.as_deref().map(|a| a.name),
+            Some(TypeName::Map)
+        );
+        assert_eq!(return_type.as_deref().map(|a| a.name), Some(TypeName::Map));
+        // `map` outside an annotation position stays an identifier.
+        let AstKind::Let { name, .. } = &statements[2].kind else {
+            panic!("expected a let declaration")
+        };
+        assert_eq!(name.len(), 3);
     }
 
     #[test]

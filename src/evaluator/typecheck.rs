@@ -33,6 +33,8 @@ pub enum Type {
     String,
     /// An immutable list, written `list` in source.
     List,
+    /// An immutable map, written `map` in source.
+    Map,
     /// A callable function, written `function` in source.
     Function,
     /// The absence of a meaningful value, written `unit` in source.
@@ -49,6 +51,7 @@ impl Type {
             TypeName::Boolean => Self::Boolean,
             TypeName::String => Self::String,
             TypeName::List => Self::List,
+            TypeName::Map => Self::Map,
             TypeName::Function => Self::Function,
             TypeName::Unit => Self::Unit,
             TypeName::Module => Self::Module,
@@ -64,6 +67,7 @@ impl fmt::Display for Type {
             Self::Boolean => "bool",
             Self::String => "string",
             Self::List => "list",
+            Self::Map => "map",
             Self::Function => "function",
             Self::Unit => "unit",
             Self::Module => "module",
@@ -293,6 +297,21 @@ impl TypeChecker<'_> {
                 }
                 Type::List
             }
+            AstKind::Map { entries } => {
+                for entry in entries {
+                    let key_type = self.node(&entry.key, active);
+                    if active {
+                        self.expect_one_of(
+                            &[key_type],
+                            0,
+                            &[Type::String, Type::Integer],
+                            "map key",
+                        );
+                    }
+                    let _ = self.node(&entry.value, active);
+                }
+                Type::Map
+            }
             AstKind::Group { expression } => self.node(expression, active),
             AstKind::Unary { operator, operand } => {
                 let operand_type = self.node(operand, active);
@@ -389,12 +408,15 @@ impl TypeChecker<'_> {
                     let iterable_type = self.node(end, active);
                     match iterable_type {
                         Type::String => Type::String,
-                        Type::List | Type::Unknown => Type::Unknown,
+                        // A map yields its keys, which may be strings or
+                        // integers; stay honest and leave the binding
+                        // dynamic.
+                        Type::List | Type::Map | Type::Unknown => Type::Unknown,
                         other if active => {
                             self.error(
                                 end.span,
                                 format!(
-                                    "type error: `for` expects `string` or `list`, found `{other}`"
+                                    "type error: `for` expects `string`, `list`, or `map`, found `{other}`"
                                 ),
                             );
                             Type::Unknown
@@ -423,6 +445,11 @@ impl TypeChecker<'_> {
                 let object_type = self.node(object, active);
                 let index_type = self.node(index, active);
                 if !active {
+                    return Type::Unknown;
+                }
+                if object_type == Type::Map {
+                    // Maps index by key: strings and integers.
+                    self.expect_one_of(&[index_type], 0, &[Type::String, Type::Integer], "map key");
                     return Type::Unknown;
                 }
                 self.expect(Type::Integer, index_type, index.span, "index");
@@ -652,11 +679,16 @@ impl TypeChecker<'_> {
                         Type::String => {
                             self.expect_argument(Type::String, &argument_types, 1, name)
                         }
+                        // List membership matches values of any type; map
+                        // membership tests keys.
                         Type::List | Type::Unknown => {}
+                        Type::Map => {
+                            self.expect_one_of(&argument_types, 1, &[Type::String, Type::Integer], "map key")
+                        }
                         other => self.error(
                             Span::new(0, 0),
                             format!(
-                                "type error: `{name}` expects `string` or `list`, found `{other}`"
+                                "type error: `{name}` expects `string`, `list`, or `map`, found `{other}`"
                             ),
                         ),
                     }
@@ -708,6 +740,52 @@ impl TypeChecker<'_> {
                 exact(self, 2);
                 self.expect_argument(Type::List, &argument_types, 0, name);
                 Type::List
+            }
+            BuiltinFunction::Keys | BuiltinFunction::Values => {
+                exact(self, 1);
+                self.expect_argument(Type::Map, &argument_types, 0, name);
+                Type::List
+            }
+            BuiltinFunction::Get => {
+                if argument_types.len() != 2 && argument_types.len() != 3 {
+                    self.error(
+                        Span::new(0, 0),
+                        format!(
+                            "type error: `{name}` expects 2 or 3 argument(s), received {}",
+                            argument_types.len()
+                        ),
+                    );
+                }
+                self.expect_argument(Type::Map, &argument_types, 0, name);
+                self.expect_one_of(
+                    &argument_types,
+                    1,
+                    &[Type::String, Type::Integer],
+                    "map key",
+                );
+                Type::Unknown
+            }
+            BuiltinFunction::Insert => {
+                exact(self, 3);
+                self.expect_argument(Type::Map, &argument_types, 0, name);
+                self.expect_one_of(
+                    &argument_types,
+                    1,
+                    &[Type::String, Type::Integer],
+                    "map key",
+                );
+                Type::Map
+            }
+            BuiltinFunction::Remove => {
+                exact(self, 2);
+                self.expect_argument(Type::Map, &argument_types, 0, name);
+                self.expect_one_of(
+                    &argument_types,
+                    1,
+                    &[Type::String, Type::Integer],
+                    "map key",
+                );
+                Type::Map
             }
         }
     }
@@ -859,6 +937,12 @@ fn requires_check(root: &AstNode) -> bool {
                 pending.extend(statements)
             }
             AstKind::List { elements } => pending.extend(elements),
+            AstKind::Map { entries } => {
+                for entry in entries {
+                    pending.push(&entry.key);
+                    pending.push(&entry.value);
+                }
+            }
             AstKind::Member { object, .. }
             | AstKind::Group { expression: object }
             | AstKind::Unary {
@@ -1001,6 +1085,85 @@ mod tests {
         assert!(
             sink.iter()
                 .any(|diagnostic| diagnostic.message.contains("--strict-types"))
+        );
+    }
+
+    #[test]
+    fn map_annotations_and_indexing_check() {
+        let sink = check_source("let m: map = #{\"a\": 1}; m[\"a\"] + 1; m[2];", false);
+        assert!(!sink.has_errors(), "{:?}", sink.iter().collect::<Vec<_>>());
+
+        let sink = check_source("let m: map = #{\"a\": 1}; m[true];", false);
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("map key"))
+        );
+
+        let sink = check_source("let m: map = #{ true: 1 };", false);
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("map key"))
+        );
+    }
+
+    #[test]
+    fn map_key_checks_apply_only_in_active_contexts() {
+        // Unannotated programs stay dynamic: bad keys fail at runtime.
+        let sink = check_source("#{ true: 1 };", false);
+        assert!(!sink.has_errors(), "{:?}", sink.iter().collect::<Vec<_>>());
+        // Strict programs check everything.
+        let sink = check_source("#{ true: 1 };", true);
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("map key"))
+        );
+    }
+
+    #[test]
+    fn map_builtin_signatures_check() {
+        let sink = check_source(
+            "let m: map = insert(#{}, \"k\", 1); remove(m, \"k\");",
+            false,
+        );
+        assert!(!sink.has_errors(), "{:?}", sink.iter().collect::<Vec<_>>());
+
+        let sink = check_source(
+            "let k: list = keys(#{\"a\": 1}); let v: list = values(#{});",
+            false,
+        );
+        assert!(!sink.has_errors(), "{:?}", sink.iter().collect::<Vec<_>>());
+
+        let sink = check_source("let n: int = keys(#{\"a\": 1});", false);
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("initializer expects `int`"))
+        );
+
+        let sink = check_source("insert(#{}, true, 1);", true);
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("map key"))
+        );
+
+        let sink = check_source("keys(42);", true);
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("`keys`"))
+        );
+    }
+
+    #[test]
+    fn for_loops_accept_maps() {
+        let sink = check_source(
+            "let total: int = 0; for k in #{\"a\": 1} { total = total + 1; };",
+            false,
+        );
+        assert!(!sink.has_errors(), "{:?}", sink.iter().collect::<Vec<_>>());
+
+        let sink = check_source("for k in 3 { k; };", true);
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("`map`"))
         );
     }
 }

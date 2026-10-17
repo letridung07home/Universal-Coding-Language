@@ -64,7 +64,8 @@ than scheduled:
 Every planned v1 item was completed in UCL 1.19.0, the final stable v1
 release. UCL 2.0.0 then delivered the explicitly breaking transition to optional
 static type checking. UCL 2.1.0 adds a safe batch-checking command for multiple
-entry files and their imports. The current language, CLI, library API, and error
+entry files and their imports. UCL 2.2.0 adds map values, the last missing
+aggregate. The current language, CLI, library API, and error
 categories are covered by the [v2 compatibility guarantees](guarantees.md).
 
 ## Beyond 1.7
@@ -77,6 +78,12 @@ Sketched rather than scheduled:
 - [x] Aggregate values such as lists (UCL 1.11 adds immutable lists with
       indexing, equality, and iteration; UCL 1.12 adds functional `append`,
       concatenation, and list support in `slice` and `find`)
+- [x] Keyed aggregates: UCL 2.2.0 adds immutable map values with
+      `#{ key: value }` literals (string or integer keys in insertion
+      order), strict `map[key]` lookup, order-free equality, `for` key
+      iteration, and the functional `keys`, `values`, `get`, `insert`, and
+      `remove` toolkit, with shared storage and in-place fast paths so
+      `insert`/`remove` accumulation stays linear like `append`
 - [x] A source formatter (`ucl fmt`) with deterministic layout, comment
       preservation, idempotent output, and a CI-friendly `--check` mode;
       this completes the roadmap (UCL 1.14)
@@ -136,11 +143,16 @@ Refactor work tracked for future releases; none changes language behavior:
 
 ### Release pipeline status
 
-- **UCL 2.1.0** is the current v2 minor release. It adds `ucl check` for safe,
-  multi-file static analysis in CI and editor workflows while keeping the
-  existing single-source `--type-check` interface. The command resolves and
-  checks imported modules without evaluation, honors `-p/--path` and
-  `UCL_PATH`, and supports `--strict-types`.
+- **UCL 2.2.0** is the current v2 minor release. It adds map values:
+  `#{ key: value }` literals with string or integer keys kept in insertion
+  order, strict `map[key]` lookup, order-free `==`/`!=`, `for` key
+  iteration, `map` type annotations, and the functional `keys`, `values`,
+  `get`, `insert`, and `remove` toolkit.
+- UCL 2.1.0 added `ucl check` for safe, multi-file static analysis in CI and
+  editor workflows while keeping the existing single-source `--type-check`
+  interface. The command resolves and checks imported modules without
+  evaluation, honors `-p/--path` and `UCL_PATH`, and supports
+  `--strict-types`.
 - The tag-driven workflow builds Linux x86_64, macOS (Apple Silicon and Intel),
   and Windows x86_64 artifacts and publishes their combined `sha256sums.txt`
   manifest. The metadata gate runs before the release build to keep Cargo

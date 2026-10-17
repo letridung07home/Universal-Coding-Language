@@ -2,6 +2,48 @@
 
 All notable changes to UCL are documented here.
 
+## 2.2.0 - 2026-10-17
+
+### Added
+
+- Added map values, UCL's second aggregate: immutable maps from string or
+  integer keys to values, written `#{ "a": 1, 2: "x" }`. Entries are kept
+  in insertion order; keys may be any expression that evaluates to a string
+  or an integer, and `#{}` is the empty map.
+- Map indexing `map[key]` looks up string and integer keys and reports a
+  missing key as a runtime error, matching list bounds strictness. Indexing
+  a map by any other key type is an error.
+- `==` and `!=` compare maps by their keys and values, independent of
+  insertion order, recursively through nested lists and maps. Comparing a
+  map to a non-map remains a type error.
+- `for key in map` iterates the keys in insertion order, matching
+  `keys(map)`.
+- Added the functional map toolkit: `keys(map)`, `values(map)`,
+  `get(map, key)`, `get(map, key, default)`, `insert(map, key, value)`, and
+  `remove(map, key)`. `insert` adds or replaces one entry (keeping the key's
+  insertion position) and `remove` drops one key; both return new maps and
+  leave the original untouched, mirroring `append`.
+- `len` accepts maps, `contains(map, key)` reports key membership,
+  `type(map)` is `"map"`, and `str(map)` renders `#{...}` with quoted string
+  keys. Display follows insertion order and quotes strings inside maps just
+  like list elements.
+- The optional v2 type annotations accept `map`, and `--strict-types` maps
+  it onto the runtime type name. `map` remains an ordinary identifier
+  outside annotation positions.
+- Assignment through the accumulator idioms `m = insert(m, k, v)` and
+  `m = remove(m, k)` takes the same in-place fast path as `append`, so
+  building maps in loops stays linear in total work, and aliasing still
+  forces copies with the same deterministic allocation budget.
+
+### Changed
+
+- `for` error messages now list every iterable form (`string`, `list`,
+  `map`, or range), and `len`/`contains` diagnostics name their expanded
+  accepted types. Error wording is explicitly not a stable target under the
+  v2 guarantees; successful programs are unaffected.
+- Updated CLI help, spec, guarantees, roadmap, and README for the additive
+  2.2 map values.
+
 ## 2.1.0 - 2026-08-28
 
 ### Added

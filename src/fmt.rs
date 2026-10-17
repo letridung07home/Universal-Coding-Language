@@ -225,6 +225,7 @@ impl<'src> Formatter<'src> {
             | AstKind::Member { .. }
             | AstKind::Index { .. }
             | AstKind::List { .. }
+            | AstKind::Map { .. }
             | AstKind::Group { .. }
             | AstKind::Unary { .. }
             | AstKind::Binary { .. }
@@ -489,6 +490,39 @@ impl<'src> Formatter<'src> {
                     text
                 }
             }
+            AstKind::Map { entries } => {
+                // A map that spanned source lines stays expanded, one entry
+                // per line with trailing commas; short maps stay inline.
+                let multiline = self
+                    .source
+                    .slice(node.span)
+                    .is_some_and(|text| text.contains('\n'));
+                if !multiline || entries.is_empty() {
+                    let items: Vec<String> = entries
+                        .iter()
+                        .map(|entry| {
+                            let key = self.expr_text(&entry.key, indent);
+                            let value = self.expr_text(&entry.value, indent);
+                            format!("{key}: {value}")
+                        })
+                        .collect();
+                    format!("#{{{}}}", items.join(", "))
+                } else {
+                    let mut text = String::from("#{\n");
+                    for entry in entries {
+                        let key = self.expr_text(&entry.key, indent + 1);
+                        let value = self.expr_text(&entry.value, indent + 1);
+                        text.push_str(&indent_padding(indent + 1));
+                        text.push_str(&key);
+                        text.push_str(": ");
+                        text.push_str(&value);
+                        text.push_str(",\n");
+                    }
+                    text.push_str(&indent_padding(indent));
+                    text.push('}');
+                    text
+                }
+            }
             other => self.compact(other, indent),
         }
     }
@@ -639,6 +673,7 @@ impl<'src> Formatter<'src> {
             | AstKind::Member { .. }
             | AstKind::Index { .. }
             | AstKind::List { .. }
+            | AstKind::Map { .. }
             | AstKind::Group { .. }
             | AstKind::Unary { .. }
             | AstKind::Binary { .. }
@@ -919,6 +954,14 @@ mod construct_tests {
         assert_eq!(
             fmt("let a = [1,\n     2,\n];\nlet b = [1, 2];"),
             "let a = [\n    1,\n    2,\n];\nlet b = [1, 2];\n"
+        );
+    }
+
+    #[test]
+    fn expands_multiline_maps_and_keeps_short_ones_inline() {
+        assert_eq!(
+            fmt("let a = #{\"x\": 1,\n     2: y,\n};\nlet b = #{\"x\": 1, 2: y};\nlet c = #{};"),
+            "let a = #{\n    \"x\": 1,\n    2: y,\n};\nlet b = #{\"x\": 1, 2: y};\nlet c = #{};\n"
         );
     }
 

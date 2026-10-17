@@ -1,6 +1,6 @@
 # Universal Coding Language (UCL) — Language Specification
 
-> **Status:** stable as of version 2.0.1. This document specifies the language
+> **Status:** stable as of version 2.2.0. This document specifies the language
 > implemented by the compiler pipeline (lexer → parser → optional type checker
 > → evaluator) and is the normative definition of that language.
 
@@ -13,16 +13,20 @@ occurred).
 
 The current implementation is intentionally small. It provides:
 
-- six value types: *unit*, *integer*, *boolean*, *string*, *function*, and
-  read-only *module namespaces* created by aliased imports;
+- seven value types: *unit*, *integer*, *boolean*, *string*, *function*, read-only
+  *module namespaces* created by aliased imports, and *map*;
 - integer, boolean, and string operators;
 - `let` declarations, assignment, blocks, and lexical scoping;
 - named functions with positional parameters, calls, and recursion;
 - immutable list values with literals, indexing, equality, and iteration;
-- a built-in prelude: `len(string)`, `str(value)`, `type(value)`,
+- immutable map values with `#{ key: value }` literals, key lookup, order-free
+  equality, and key iteration;
+- a built-in prelude: `len(value)`, `str(value)`, `type(value)`,
   `upper(string)`, `lower(string)`, `contains(haystack, needle)`, `int(value)`,
   `find(haystack, needle)`, `replace(source, pattern, replacement)`,
-  `trim(value)`, and `slice(value, start, end)`;
+  `trim(value)`, `slice(value, start, end)`, `append(list, item)`,
+  `keys(map)`, `values(map)`, `get(map, key)`, `insert(map, key, value)`, and
+  `remove(map, key)`;
 - conditional expressions (`if`/`else`), `while` and `for` loops, and
   `break`/`continue` loop control;
 - local-file modules with flat or read-only namespaced imports, extensionless
@@ -107,11 +111,12 @@ literal syntax).
 
 ### 2.8 Punctuation
 
-The characters `( ) { } , ; : = + - * / % ^ < > & | ! .` are significant. The
-colon introduces an optional type annotation (§3.1). The two-character
-sequences `<=`, `>=`, `==`, and `!=` are tokenized as single
+The characters `( ) { } , ; : = + - * / % ^ < > & | ! . #` are significant. The
+colon introduces an optional type annotation (§3.1). The character `#`
+introduces a map literal when immediately followed by `{` (§4). The
+two-character sequences `<=`, `>=`, `==`, and `!=` are tokenized as single
 operator tokens (§4.2), and the two-character sequence `..` is tokenized as a
-range separator, legal only in a `for` header (§5.4). Any other ASCII
+range separator, legal only in a `for` header (§4.7). Any other ASCII
 punctuation character is tokenized as punctuation; one that no parser
 production accepts produces an error at that position. The two-character
 sequence `//` begins a comment (§2.3) and is not tokenized as punctuation.
@@ -130,7 +135,9 @@ error and skipped, so scanning continues after it.
 | `boolean` | `true` or `false`.                     | `true`, `1 < 2`  |
 | `string`  | A sequence of Unicode characters.      | `"hello"`, `"a" + "b"` |
 | `list`    | An ordered, immutable sequence of values. | `[1, 2, 3]`, `[]` |
+| `map`     | An immutable mapping from string or integer keys to values, kept in insertion order. | `#{ "a": 1, 2: "x" }`, `#{}` |
 | `function` | A callable with positional parameters. | `fn add(a, b) { a + b; }`, `fn(n) { n; }` |
+| `module`  | A read-only namespace of exported module bindings. | `use "math.ucl" as math;` |
 
 UCL is **dynamically typed by default**. Values carry runtime types and
 operators validate their operands when evaluated. Version 2.0.0 adds optional
@@ -140,7 +147,7 @@ evaluation; unannotated source retains dynamic behavior.
 ### 3.1 Optional static annotations
 
 ```
-type-name        ::= "int" | "bool" | "string" | "list"
+type-name        ::= "int" | "bool" | "string" | "list" | "map"
                    | "function" | "unit" | "module"
 type-annotation  ::= ":" type-name
 ```
@@ -186,11 +193,14 @@ primary            ::= integer-literal
                    | boolean-literal
                    | string-literal
                    | list-literal
+                   | map-literal
                    | function-literal
                    | identifier
                    | "(" expression ")"
                    | block
 list-literal       ::= "[" expression-list? "]"
+map-literal        ::= "#{" ( map-entry ("," map-entry)* ","? )? "}"
+map-entry          ::= expression ":" expression
 expression-list    ::= expression ("," expression)*
 if-expression   ::= "if" expression block ("else" (block | if-expression))?
 ```
@@ -203,6 +213,10 @@ A *primary* is:
 - a **list literal** `[ expression, ... ]`, evaluating to a `list` value
   holding the element expressions' values in source order; lists nest
   arbitrarily and an empty list is written `[]`;
+- a **map literal** `#{ key: value, ... }`, evaluating to a `map` value
+  holding one entry per `key: value` pair (§4.3.3); an empty map is written
+  `#{}` and the introducer is `#{`, never a bare `{`, so map literals never
+  compete with blocks;
 - a **function literal**, evaluating to a `function` value (§4.4);
 - an **identifier**, evaluating to the value of the referenced binding (an
   unbound identifier is an error);
@@ -260,11 +274,14 @@ integers. Both *short-circuit*: `&` does not evaluate its right-hand side when
 the left-hand side is `false`, and `|` does not evaluate it when the left-hand
 side is `true`. Errors in a skipped operand are therefore not reported.
 
-Equality (`==`, `!=`) is defined for two integers, two booleans, or two
-strings; comparing values of different types is an error. Relational
-operators (`<`, `>`, `<=`, `>=`) are defined for two integers (numeric
-order) and for two strings (lexicographic order by Unicode scalar value);
-mixing types is an error.
+Equality (`==`, `!=`) is defined for two integers, two booleans, two
+strings, two lists, or two maps; comparing values of different types is an
+error. Lists compare element by element, recursing through nested lists.
+Maps compare by their keys and values: the same keys mapped to equal values
+are equal regardless of insertion order, and nested lists and maps compare
+recursively. Relational operators (`<`, `>`, `<=`, `>=`) are defined for two
+integers (numeric order) and for two strings (lexicographic order by Unicode
+scalar value); mixing types is an error.
 
 Integer arithmetic is *checked*: addition, subtraction, multiplication,
 negation, and exponentiation that overflow the signed 64-bit range, and
@@ -298,18 +315,23 @@ The prelude currently provides these built-ins:
 
 | Call | Result |
 |------|--------|
-| `len(value)` | An integer equal to the number of Unicode scalar values in `value` when it is a string, or the number of elements when it is a list. |
-| `str(value)` | A string holding the same text the CLI and REPL echo for `value`: integers and booleans render as written, strings are unchanged, lists render as `[` + elements + `]` with element strings quoted, functions render as `<function>`, modules render as `<module>`, and unit renders as `unit`. |
-| `type(value)` | A string naming the value's type: `integer`, `boolean`, `string`, `list`, `function`, or `module`. |
+| `len(value)` | An integer equal to the number of Unicode scalar values in `value` when it is a string, the number of elements when it is a list, or the number of entries when it is a map. |
+| `str(value)` | A string holding the same text the CLI and REPL echo for `value`: integers and booleans render as written, strings are unchanged, lists render as `[` + elements + `]` with element strings quoted, maps render as `#{` + `key: value` entries in insertion order + `}` with string keys and element strings quoted, functions render as `<function>`, modules render as `<module>`, and unit renders as `unit`. |
+| `type(value)` | A string naming the value's type: `integer`, `boolean`, `string`, `list`, `map`, `function`, or `module`. |
 | `upper(string)` | The string converted to upper case. |
 | `lower(string)` | The string converted to lower case. |
-| `contains(haystack, needle)` | A boolean reporting whether the string `haystack` contains the string `needle` as a substring, or whether the list `haystack` contains an element equal to `needle` (using `==`, so nested lists compare element by element). |
+| `contains(haystack, needle)` | A boolean reporting whether the string `haystack` contains the string `needle` as a substring, whether the list `haystack` contains an element equal to `needle` (using `==`, so nested lists compare element by element), or whether the map `haystack` has `needle` as a key (keys must be strings or integers). |
 | `int(value)` | An integer parsed from `value`: strings must consist of an optional `+` or `-` sign followed by ASCII decimal digits, with no surrounding whitespace; integers pass through unchanged. Parsing failures, out-of-range values, and non-string arguments are runtime errors. |
 | `find(haystack, needle)` | An integer giving the scalar-value index of the first occurrence of the string `needle` in the string `haystack`, or `-1` if it does not occur. When `haystack` is a list, returns the index of the first element equal to `needle` (using `==`), or `-1`. |
 | `replace(source, pattern, replacement)` | A copy of the string `source` with every occurrence of the string `pattern` replaced by the string `replacement`. An empty `pattern` is a runtime error. |
 | `trim(value)` | A copy of the string `value` with leading and trailing whitespace removed. |
 | `slice(value, start, end)` | The substring of the string `value` from scalar-value index `start` (inclusive) to `end` (exclusive), or a new list holding the elements of the list `value` in that range. Indices must satisfy `0 <= start <= end <= len(value)`; violations, including negative indices, are runtime errors. |
 | `append(list, item)` | A new list holding the elements of the list `list` followed by `item`. The original list is untouched: `append` does not mutate. |
+| `keys(map)` | A new list holding the map's keys in insertion order. |
+| `values(map)` | A new list holding the map's values in insertion order. |
+| `get(map, key)` | The map's value for `key`, or unit when the key is missing. `get(map, key, default)` returns `default` instead of unit. Unlike indexing, a missing key is not an error. |
+| `insert(map, key, value)` | A new map with `key` bound to `value`. A key already present keeps its insertion position and gains the new value; a fresh key is appended. The original map is untouched: `insert` does not mutate. |
+| `remove(map, key)` | A new map without `key`, with the remaining entries in order. A missing key is a runtime error, matching indexing strictness. The original map is untouched: `remove` does not mutate. |
 
 For example, `len("hé")` evaluates to `2`, `upper("hé")` evaluates to `"HÉ"`,
 `type(len)` evaluates to `"function"`, `int("-41") + 1` evaluates to
@@ -330,14 +352,36 @@ allowing recursion.
 ### 4.3.2 Index expressions
 
 An index expression has the form `object[index]` and may chain
-(`matrix[0][1]`). The object is evaluated first, then the index, which must
-evaluate to an integer.
+(`matrix[0][1]`, `records[0]["name"]`). The object is evaluated first, then
+the index or key expression.
 
 Indexing a **list** yields the element at that position; indexing a
 **string** yields the one-character string at that scalar-value position
 (matching how `len` counts). Indices are zero-based and strict: a negative
-or out-of-range index is a runtime error, never a silent lookup. Indexing
-any other type is a runtime error.
+or out-of-range index is a runtime error, never a silent lookup.
+
+Indexing a **map** looks the key up: the key must evaluate to a string or an
+integer, and a missing key is a runtime error, matching list bounds
+strictness. `get` (§4.3.1) offers the defaulting lookup. Indexing any other
+type is a runtime error.
+
+### 4.3.3 Map literals
+
+A map literal `#{ key: value, ... }` evaluates each entry's key expression,
+then its value expression, in source order, and produces a `map` value. Keys
+may be arbitrary expressions but must evaluate to strings or integers; any
+other key type is a runtime error. The empty map is written `#{}`. A
+trailing comma after the last entry is accepted, matching list literals.
+
+A key may appear at most once per literal: a repeated key is a runtime error
+rather than a silent last-one-wins update, so `insert` (§4.3.1) is the single
+update path. Entry order is the source order and is observable through
+iteration (§4.7), `keys`, `values`, and rendering; equality (§4.2) ignores
+it.
+
+Maps are immutable values: there is no entry assignment, and `insert` and
+`remove` return new maps. Like list literals, a map literal's entries hold
+the evaluated values, and later rebinding of names does not change them.
 
 ### 4.4 Function literals and closures
 ```
@@ -408,12 +452,13 @@ nested loops from multiplying evaluator work beyond a deterministic bound.
 Evaluation also carries a deterministic **cumulative allocation budget**
 (currently 256 MiB): every operation that builds new value data charges its
 cost — string concatenation and case mapping charge the bytes they copy,
-`trim`, `slice`, and `replace` charge their result, and list concatenation
-charges every element copied. Exceeding the budget aborts evaluation with
-an error, so programs whose work grows quadratically — such as repeatedly
-concatenating onto a growing string or re-mapping a large one — stop
-quickly instead of running unbounded. Ordinary accumulation through
-`acc = acc + text`, `items = append(items, x)`, and `items = items + [x]`
+`trim`, `slice`, `replace`, `keys`, and `values` charge their result, and
+list concatenation and map updates charge every element or entry copied.
+Exceeding the budget aborts evaluation with an error, so programs whose work
+grows quadratically — such as repeatedly concatenating onto a growing string
+or re-mapping a large one — stop quickly instead of running unbounded.
+Ordinary accumulation through `acc = acc + text`, `items = append(items, x)`,
+`items = items + [x]`, `m = insert(m, k, v)`, and `m = remove(m, k)`
 assignments is linear and stays far below the budget.
 
 Work that only *reads* existing values is not charged: comparing or
@@ -439,6 +484,9 @@ per iteration. Two forms are supported:
   binding each as a one-character string.
 - **List form** `for item in value`: the expression must evaluate to a list,
   and the loop iterates over its elements in order.
+- **Map form** `for key in value`: the expression must evaluate to a map,
+  and the loop iterates over its keys in insertion order (§4.3.3), binding
+  each key in turn.
 
 The two dot characters of `..` must be adjacent; the separator is legal only
 in a `for` header and is not a general expression operator.

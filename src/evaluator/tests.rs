@@ -2123,3 +2123,294 @@ fn list_concat_charges_aliased_copies() {
     }));
     assert_eq!(value, None);
 }
+
+#[test]
+fn map_literals_evaluate_and_keep_insertion_order() {
+    for (source, expected) in [
+        ("str(#{})", "#{}"),
+        ("str(#{\"a\": 1})", "#{\"a\": 1}"),
+        ("str(#{\"a\": 1, 2: \"x\"})", "#{\"a\": 1, 2: \"x\"}"),
+        (
+            "str(#{\"nested\": [1, 2], \"m\": #{\"k\": true}})",
+            "#{\"nested\": [1, 2], \"m\": #{\"k\": true}}",
+        ),
+        ("str(#{\"s\": \"raw\"})", "#{\"s\": \"raw\"}"),
+    ] {
+        let (value, sink) = eval(source);
+        assert!(!sink.has_errors(), "unexpected error for `{source}`");
+        assert_eq!(
+            value,
+            Some(Value::Str(expected.to_owned())),
+            "for `{source}`"
+        );
+    }
+}
+
+#[test]
+fn map_keys_must_be_strings_or_integers() {
+    for source in ["#{ true: 1 };", "#{ [1]: 2 };", "#{}[false];", "#{}[[]];"] {
+        let (value, sink) = eval(source);
+        assert_eq!(value, None, "expected an error for `{source}`");
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("map key")),
+            "for `{source}`"
+        );
+    }
+}
+
+#[test]
+fn map_key_expressions_evaluate_before_their_values() {
+    // Keys are ordinary expressions: string building, calls, and indexing
+    // all work in key position.
+    let (value, sink) =
+        eval("let k = \"x\"; #{ k + \"1\": 1, 1 + 1: k }[\"x1\"] + len(#{ k: 1 });");
+    assert!(!sink.has_errors());
+    assert_eq!(value, Some(Value::Integer(2)));
+
+    let (value, sink) = eval("fn key() { \"a\"; }; #{ key(): key() }[\"a\"];");
+    assert!(!sink.has_errors());
+    assert_eq!(value, Some(Value::Str("a".to_owned())));
+}
+
+#[test]
+fn map_literals_reject_duplicate_keys() {
+    // Duplicates are errors, not silent last-one-wins updates: `insert` is
+    // the single update path, for both string and integer keys.
+    for source in ["#{\"a\": 1, \"a\": 2};", "#{1: \"x\", 1: \"y\"};"] {
+        let (value, sink) = eval(source);
+        assert_eq!(value, None, "expected an error for `{source}`");
+        assert!(
+            sink.iter()
+                .any(|diagnostic| diagnostic.message.contains("duplicate map key")),
+            "for `{source}`"
+        );
+    }
+}
+
+#[test]
+fn maps_index_by_string_and_integer_keys() {
+    let (value, sink) = eval("#{\"a\": 1, 2: \"x\"}[\"a\"] + 1;");
+    assert!(!sink.has_errors());
+    assert_eq!(value, Some(Value::Integer(2)));
+
+    let (value, sink) = eval("#{\"a\": 1, 2: \"x\"}[2];");
+    assert!(!sink.has_errors());
+    assert_eq!(value, Some(Value::Str("x".to_owned())));
+
+    // A missing key is an error, like a list index out of range; `get`
+    // offers the defaulting path.
+    let (value, sink) = eval("#{}[\"missing\"];");
+    assert_eq!(value, None);
+    assert!(
+        sink.iter()
+            .any(|diagnostic| diagnostic.message.contains("map key not found"))
+    );
+}
+
+#[test]
+fn compares_maps_for_key_value_equality() {
+    for (source, expected) in [
+        ("#{} == #{};", true),
+        ("#{\"a\": 1, \"b\": 2} == #{\"b\": 2, \"a\": 1};", true),
+        ("#{\"a\": 1} == #{\"a\": 2};", false),
+        ("#{\"a\": 1} == #{\"a\": 1, \"b\": 2};", false),
+        ("#{\"a\": [1, 2]} == #{\"a\": [1, 2]};", true),
+        ("#{\"m\": #{1: true}} == #{\"m\": #{1: true}};", true),
+        ("#{1: \"x\"} != #{2: \"x\"};", true),
+    ] {
+        let (value, sink) = eval(source);
+        assert!(!sink.has_errors(), "unexpected error for `{source}`");
+        assert_eq!(value, Some(Value::Boolean(expected)), "for `{source}`");
+    }
+    // Mixed-type comparisons remain errors.
+    let (value, sink) = eval("#{} == [];");
+    assert_eq!(value, None);
+    assert!(sink.has_errors());
+}
+
+#[test]
+fn for_loops_iterate_map_keys_in_insertion_order() {
+    let (value, sink) =
+        eval("let log = \"\"; for k in #{\"a\": 1, \"b\": 2, \"c\": 3} { log = log + k; }; log;");
+    assert!(!sink.has_errors());
+    assert_eq!(value, Some(Value::Str("abc".to_owned())));
+
+    let (value, sink) = eval("let n = 0; for k in #{} { n = n + 1; }; n;");
+    assert!(!sink.has_errors());
+    assert_eq!(value, Some(Value::Integer(0)));
+}
+
+#[test]
+fn len_and_contains_accept_maps() {
+    for (source, expected) in [
+        ("len(#{}) == 0;", true),
+        ("len(#{\"a\": 1, \"b\": 2}) == 2;", true),
+        ("contains(#{\"a\": 1}, \"a\");", true),
+        ("contains(#{\"a\": 1}, \"b\");", false),
+        ("contains(#{2: \"x\"}, 2);", true),
+    ] {
+        let (value, sink) = eval(source);
+        assert!(!sink.has_errors(), "unexpected error for `{source}`");
+        assert_eq!(value, Some(Value::Boolean(expected)), "for `{source}`");
+    }
+}
+
+#[test]
+fn map_toolkit_returns_keys_values_and_defaults() {
+    let (value, sink) = eval("str(keys(#{\"a\": 1, 2: \"x\"}));");
+    assert!(!sink.has_errors());
+    assert_eq!(value, Some(Value::Str("[\"a\", 2]".to_owned())));
+
+    let (value, sink) = eval("str(values(#{\"a\": 1, 2: \"x\"}));");
+    assert!(!sink.has_errors());
+    assert_eq!(value, Some(Value::Str("[1, \"x\"]".to_owned())));
+
+    for (source, expected) in [
+        ("get(#{\"a\": 1}, \"a\");", Some(Value::Integer(1))),
+        ("get(#{\"a\": 1}, \"b\");", Some(Value::Unit)),
+        ("get(#{\"a\": 1}, \"b\", 42);", Some(Value::Integer(42))),
+        (
+            "get(#{\"a\": 1}, \"b\", \"fallback\");",
+            Some(Value::Str("fallback".to_owned())),
+        ),
+    ] {
+        let (value, sink) = eval(source);
+        assert!(!sink.has_errors(), "unexpected error for `{source}`");
+        assert_eq!(value, expected, "for `{source}`");
+    }
+}
+
+#[test]
+fn insert_and_remove_are_functional() {
+    // The original map is untouched.
+    let (value, sink) =
+        eval("let a = #{\"x\": 1}; let b = insert(a, \"y\", 2); str(a) + \" \" + str(b);");
+    assert!(!sink.has_errors());
+    assert_eq!(
+        value,
+        Some(Value::Str("#{\"x\": 1} #{\"x\": 1, \"y\": 2}".to_owned()))
+    );
+
+    // Replacing a key keeps its insertion position.
+    let (value, sink) = eval("str(insert(#{\"a\": 1, \"b\": 2}, \"a\", 9));");
+    assert!(!sink.has_errors());
+    assert_eq!(value, Some(Value::Str("#{\"a\": 9, \"b\": 2}".to_owned())));
+
+    let (value, sink) =
+        eval("let a = #{\"x\": 1, \"y\": 2}; let b = remove(a, \"x\"); str(a) + \" \" + str(b);");
+    assert!(!sink.has_errors());
+    assert_eq!(
+        value,
+        Some(Value::Str("#{\"x\": 1, \"y\": 2} #{\"y\": 2}".to_owned()))
+    );
+
+    // Removing a missing key is an error, matching strict indexing.
+    let (value, sink) = eval("remove(#{\"x\": 1}, \"gone\");");
+    assert_eq!(value, None);
+    assert!(
+        sink.iter()
+            .any(|diagnostic| diagnostic.message.contains("map key not found"))
+    );
+}
+
+#[test]
+fn type_reports_map() {
+    let (value, sink) = eval("type(#{});");
+    assert!(!sink.has_errors());
+    assert_eq!(value, Some(Value::Str("map".to_owned())));
+
+    let (value, sink) = eval("type(insert(#{}, \"k\", 1));");
+    assert!(!sink.has_errors());
+    assert_eq!(value, Some(Value::Str("map".to_owned())));
+}
+
+#[test]
+fn reports_map_builtin_arity_and_type_errors() {
+    for source in [
+        "keys();",
+        "keys(1);",
+        "keys(\"s\");",
+        "keys([]);",
+        "values();",
+        "values(true);",
+        "get(1, 2);",
+        "get(#{});",
+        "get(#{}, 1, 2, 3);",
+        "get(#{}, true);",
+        "insert();",
+        "insert(#{}, 1);",
+        "insert(1, 1, 2);",
+        "insert(#{}, true, 2);",
+        "remove();",
+        "remove(#{}, 1, 2);",
+        "remove([], 1);",
+        "remove(#{}, false);",
+    ] {
+        let (value, sink) = eval(source);
+        assert_eq!(value, None, "expected an error for `{source}`");
+    }
+}
+
+#[test]
+fn map_insert_fast_path_preserves_aliased_semantics() {
+    // When another binding holds the map, inserting must copy: the
+    // original stays untouched even though assignment goes through the
+    // in-place fast path.
+    let (value, sink) =
+        eval("let a = #{\"x\": 1}; let b = a; a = insert(a, \"y\", 2); str(a) + str(b);");
+    assert!(!sink.has_errors());
+    assert_eq!(
+        value,
+        Some(Value::Str("#{\"x\": 1, \"y\": 2}#{\"x\": 1}".to_owned()))
+    );
+}
+
+#[test]
+fn map_remove_fast_path_preserves_aliased_semantics() {
+    let (value, sink) =
+        eval("let a = #{\"x\": 1, \"y\": 2}; let b = a; a = remove(a, \"x\"); str(a) + str(b);");
+    assert!(!sink.has_errors());
+    assert_eq!(
+        value,
+        Some(Value::Str("#{\"y\": 2}#{\"x\": 1, \"y\": 2}".to_owned()))
+    );
+}
+
+#[test]
+fn map_insert_accumulation_is_linear_through_the_fast_path() {
+    // `m = insert(m, k, v)` updates the binding in place; 10,000
+    // iterations must finish quickly without tripping any limit.
+    let started = std::time::Instant::now();
+    let (value, sink) = eval("let m = #{}; for i in 0..10000 { m = insert(m, i, i); }; len(m);");
+    assert!(!sink.has_errors(), "unexpected diagnostics");
+    assert_eq!(value, Some(Value::Integer(10000)));
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "`insert` accumulation should be linear, took {:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn map_insert_charges_aliased_copies() {
+    // Aliasing inside the loop forces a full copy per iteration; the
+    // budget charges each copy and stops the loop early.
+    let (value, sink) =
+        eval("let m = #{\"k\": 0}; while true { let alias = m; m = insert(m, \"k\", 1); };");
+    assert!(sink.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("evaluation exceeded its total allocation budget")
+    }));
+    assert_eq!(value, None);
+}
+
+#[test]
+fn map_updates_inside_functions_see_current_bindings() {
+    let (value, sink) = eval(
+        "let counts = #{}; fn bump(k) { counts = insert(counts, k, get(counts, k, 0) + 1); }; bump(\"a\"); bump(\"b\"); bump(\"a\"); counts[\"a\"];",
+    );
+    assert!(!sink.has_errors());
+    assert_eq!(value, Some(Value::Integer(2)));
+}

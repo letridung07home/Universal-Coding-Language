@@ -214,6 +214,39 @@ fn str_renders_unit_as_its_type_name() {
 }
 
 #[test]
+fn maps_echo_and_render_like_the_spec() {
+    let (stdout, stderr, success) = run("str(#{\"a\": 1, 2: [\"x\"]});");
+    assert!(success, "stderr: {stderr}");
+    assert_eq!(stdout, "#{\"a\": 1, 2: [\"x\"]}\n");
+
+    let (stdout, stderr, success) = run(
+        "let m = insert(#{\"b\": 2, \"a\": 1}, \"c\", 3); str(keys(m)) + \" \" + str(values(m));",
+    );
+    assert!(success, "stderr: {stderr}");
+    assert_eq!(stdout, "[\"b\", \"a\", \"c\"] [2, 1, 3]\n");
+
+    let (stdout, stderr, success) = run("#{\"a\": 1} == #{\"a\": 1};");
+    assert!(success, "stderr: {stderr}");
+    assert_eq!(stdout, "true\n");
+}
+
+#[test]
+fn reports_map_errors_without_stdout() {
+    for source in [
+        "#{\"a\": 1}[\"gone\"];",
+        "#{ true: 1 };",
+        "#{\"a\": 1, \"a\": 2};",
+        "remove(#{}, \"missing\");",
+        "insert(#{}, true, 1);",
+    ] {
+        let (stdout, stderr, success) = run(source);
+        assert!(!success, "for `{source}`");
+        assert!(stdout.is_empty(), "for `{source}`");
+        assert!(!stderr.is_empty(), "for `{source}`");
+    }
+}
+
+#[test]
 fn reports_new_builtin_errors_without_stdout() {
     for source in [
         "upper(1);",

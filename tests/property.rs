@@ -50,7 +50,7 @@ impl Rng {
 }
 
 /// Characters likely to exercise interesting lexer and parser paths.
-const ALPHABET: &str = "abcxyzletrfn012379+-*/%^<>&|!=;,(){} \t\néπ🙂\"\\ifewhls";
+const ALPHABET: &str = "abcxyzletrfn012379+-*/%^<>&|!=;,(){}#:\t\néπ🙂\"\\ifewhls";
 
 /// Generates a random string up to 64 characters long.
 fn random_string(rng: &mut Rng) -> String {

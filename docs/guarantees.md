@@ -1,9 +1,9 @@
 # UCL v2 Compatibility Guarantees
 
-**Active version:** `2.1.0`
+**Active version:** `2.2.0`
 
 This document describes the UCL project’s stability commitments from version
-`2.0.0` onward, with `2.1.0` as the current minor release. It covers the language, the `ucl` command-line program, and the
+`2.0.0` onward, with `2.2.0` as the current minor release. It covers the language, the `ucl` command-line program, and the
 Rust library crate. The final v1 contract is preserved unchanged in
 [`v1-guarantees.md`](v1-guarantees.md).
 
@@ -33,11 +33,11 @@ Static checks reject known operator, declaration, assignment, return, function
 argument, condition, indexing, and supported built-in mismatches before
 execution. Incomplete information remains dynamic rather than being guessed.
 
-The v2 type names `int`, `bool`, `string`, `list`, `function`, `unit`, and
-`module` are contextual: they are recognized only immediately after `:`. They
-remain usable as ordinary identifiers in all other positions. The v1 reserved
-keyword set remains unchanged; future reserved-word additions require a major
-release.
+The v2 type names `int`, `bool`, `string`, `list`, `map`, `function`, `unit`,
+and `module` are contextual: they are recognized only immediately after `:`.
+They remain usable as ordinary identifiers in all other positions. The v1
+reserved keyword set remains unchanged; future reserved-word additions
+require a major release.
 
 ## Diagnostics and resource safeguards
 

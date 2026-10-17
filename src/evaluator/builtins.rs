@@ -34,6 +34,19 @@ pub enum BuiltinFunction {
     /// Returns a copy of a list with one element added at the end; the
     /// original list is untouched.
     Append,
+    /// Returns a map's keys in insertion order as a list.
+    Keys,
+    /// Returns a map's values in insertion order as a list.
+    Values,
+    /// Returns a map's value for a key, or a default when the key is
+    /// missing (`get(map, key)` defaults to unit).
+    Get,
+    /// Returns a copy of a map with one entry added or replaced; the
+    /// original map is untouched.
+    Insert,
+    /// Returns a copy of a map without one key; the original map is
+    /// untouched.
+    Remove,
 }
 
 impl BuiltinFunction {
@@ -52,6 +65,11 @@ impl BuiltinFunction {
             Self::Trim => "trim",
             Self::Slice => "slice",
             Self::Append => "append",
+            Self::Keys => "keys",
+            Self::Values => "values",
+            Self::Get => "get",
+            Self::Insert => "insert",
+            Self::Remove => "remove",
         }
     }
 
@@ -70,6 +88,11 @@ impl BuiltinFunction {
             Self::Trim,
             Self::Slice,
             Self::Append,
+            Self::Keys,
+            Self::Values,
+            Self::Get,
+            Self::Insert,
+            Self::Remove,
         ]
         .into_iter()
     }

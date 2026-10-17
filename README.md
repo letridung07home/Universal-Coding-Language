@@ -7,10 +7,12 @@ provides an interpreter with a lexer, parser, evaluator, file-based modules,
 an interactive REPL, a command-line interface, and source-aware diagnostics.
 
 > [!NOTE]
-> UCL 2.1.0 is the current stable release. It preserves UCL's dynamic default
-> and optional static annotations while adding `ucl check` for safe multi-file
-> checking in CI and editor workflows. The deliberate v2 compatibility changes
-> are documented in the [compatibility guarantees](docs/guarantees.md) and
+> UCL 2.2.0 is the current stable release. It preserves UCL's dynamic default
+> and optional static annotations while adding map values — immutable
+> `#{ key: value }` maps with strict lookup, order-free equality, and a
+> functional `keys`/`values`/`get`/`insert`/`remove` toolkit. The deliberate
+> v2 compatibility changes are documented in the
+> [compatibility guarantees](docs/guarantees.md) and
 > [v2 release record](docs/v2-goal.md).
 
 ## Features
@@ -18,12 +20,15 @@ an interactive REPL, a command-line interface, and source-aware diagnostics.
 - Signed 64-bit integers, booleans, and strings
 - Immutable lists with literals, indexing, equality, `for` iteration,
   concatenation (`+`), and the `append`, `slice`, and `find` built-ins
+- Immutable maps with `#{ key: value }` literals (string or integer keys in
+  insertion order), strict `map[key]` lookup, order-free equality, `for` key
+  iteration, and the `keys`, `values`, `get`, `insert`, and `remove` built-ins
 - Checked arithmetic, comparison, and equality operators
 - String concatenation with escape sequences and a deterministic 8 MiB value limit
-- Built-in functions: `len(string)`, `str(value)`, `type(value)`,
+- Built-in functions: `len(value)`, `str(value)`, `type(value)`,
   `upper(string)`, `lower(string)`, `contains(haystack, needle)`, `int(value)`,
   `find(haystack, needle)`, `replace(source, pattern, replacement)`,
-  `trim(value)`, and `slice(value, start, end)`
+  `trim(value)`, `slice(value, start, end)`, and `append(list, item)`
 - Short-circuiting logical operators
 - `if`/`else` conditionals, `while` and `for` loops, and `break` and
   `continue` loop control
@@ -67,7 +72,7 @@ Evaluate it:
 
 ```console
 $ cargo run -- example.ucl
-UCL: true
+47
 ```
 
 Format a file in place (or pipe through stdin) with the formatter:
@@ -117,7 +122,7 @@ interactive session by running `ucl` without arguments:
 
 ```console
 $ cargo run
-UCL 2.1.0 interactive mode — type :help for help.
+UCL 2.2.0 interactive mode — type :help for help.
 >>> let x = 40;
 >>> x + 2;
 42
@@ -250,7 +255,10 @@ UCL 2.0.0 completes the major-version transition to optional static checking:
 typed declarations and function signatures are checked before evaluation,
 `--type-check` performs analysis only, and `--strict-types` requires complete
 function signatures. UCL 2.1.0 adds `ucl check` for non-evaluating batch checks
-across multiple entry files and all of their imports. Future work is tracked in
+across multiple entry files and all of their imports. UCL 2.2.0 adds map
+values with `#{ key: value }` literals, strict key lookup, order-free
+equality, key iteration, and a functional `keys`/`values`/`get`/`insert`/
+`remove` toolkit. Future work is tracked in
 the [project roadmap](docs/roadmap.md).
 
 ## Contributing

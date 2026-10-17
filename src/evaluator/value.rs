@@ -13,6 +13,162 @@ use crate::source::SourceFile;
 
 use super::BuiltinFunction;
 
+/// A map key: a string or a signed 64-bit integer.
+///
+/// Keys are restricted to these two value shapes so lookups are total and
+/// order-independent. The variant carries the key's data directly so the
+/// lookup index can hash keys without inspecting whole [`Value`]s.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum MapKey {
+    /// A string key.
+    Str(String),
+    /// An integer key.
+    Int(i64),
+}
+
+impl MapKey {
+    /// Builds a key from a runtime value, if the value is a legal key.
+    fn from_value(value: &Value) -> Option<Self> {
+        match value {
+            Value::Str(text) => Some(Self::Str(text.clone())),
+            Value::Integer(number) => Some(Self::Int(*number)),
+            _ => None,
+        }
+    }
+
+    /// Returns the key as a runtime value for iteration and inspection.
+    fn to_value(&self) -> Value {
+        match self {
+            Self::Str(text) => Value::Str(text.clone()),
+            Self::Int(number) => Value::Integer(*number),
+        }
+    }
+}
+
+/// An insertion-ordered immutable map from string or integer keys to values.
+///
+/// Entries live behind an `Rc` so cloning a map value copies a reference
+/// instead of every entry, mirroring [`Value::List`]. Iteration and
+/// rendering follow insertion order, which keeps programs deterministic;
+/// equality ignores order and compares keys to values. Functional updates
+/// (`insert`, `remove`) reuse the shared buffer through [`Rc::make_mut`]
+/// when the map is not aliased, which keeps the accumulate-in-a-loop idiom
+/// linear.
+#[derive(Clone, Debug)]
+pub struct MapValue {
+    /// Entries in insertion order.
+    entries: Vec<(MapKey, Value)>,
+    /// Lookup index from key to position in `entries`.
+    index: HashMap<MapKey, usize>,
+}
+
+impl MapValue {
+    /// Creates a map from entries in insertion order.
+    ///
+    /// Returns `None` when a key repeats, which the evaluator reports as a
+    /// duplicate-key error at the literal.
+    pub(crate) fn from_entries(entries: Vec<(Value, Value)>) -> Option<Self> {
+        let mut map = Self {
+            entries: Vec::with_capacity(entries.len()),
+            index: HashMap::with_capacity(entries.len()),
+        };
+        for (key, value) in entries {
+            let key = MapKey::from_value(&key)?;
+            if map.index.contains_key(&key) {
+                return None;
+            }
+            map.index.insert(key.clone(), map.entries.len());
+            map.entries.push((key, value));
+        }
+        Some(map)
+    }
+
+    /// Returns the number of entries.
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Returns whether the map holds no entries.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Looks up a key's value.
+    pub(crate) fn get(&self, key: &Value) -> Option<&Value> {
+        let key = MapKey::from_value(key)?;
+        self.index
+            .get(&key)
+            .map(|&position| &self.entries[position].1)
+    }
+
+    /// Returns whether `key` is present.
+    pub(crate) fn contains_key(&self, key: &Value) -> bool {
+        MapKey::from_value(key).is_some_and(|key| self.index.contains_key(&key))
+    }
+
+    /// Returns a copy of the map with `key` bound to `value`.
+    ///
+    /// An existing key keeps its insertion position and gains the new value;
+    /// a fresh key is appended. Returns false when the key is not a legal
+    /// map key, leaving the map unchanged.
+    pub(crate) fn insert_in(&mut self, key: &Value, value: Value) -> bool {
+        let Some(key) = MapKey::from_value(key) else {
+            return false;
+        };
+        match self.index.get(&key).copied() {
+            Some(position) => self.entries[position].1 = value,
+            None => {
+                self.index.insert(key.clone(), self.entries.len());
+                self.entries.push((key, value));
+            }
+        }
+        true
+    }
+
+    /// Removes `key` from the map. Returns false when the key is not a
+    /// legal key or is absent, leaving the map unchanged.
+    pub(crate) fn remove_in(&mut self, key: &Value) -> bool {
+        let Some(key) = MapKey::from_value(key) else {
+            return false;
+        };
+        let Some(position) = self.index.remove(&key) else {
+            return false;
+        };
+        self.entries.remove(position);
+        for entry_position in self.index.values_mut() {
+            if *entry_position > position {
+                *entry_position -= 1;
+            }
+        }
+        true
+    }
+
+    /// Iterates over the keys in insertion order.
+    pub(crate) fn keys(&self) -> impl Iterator<Item = Value> + '_ {
+        self.entries.iter().map(|(key, _)| key.to_value())
+    }
+
+    /// Iterates over the values in insertion order.
+    pub(crate) fn values(&self) -> impl Iterator<Item = Value> + '_ {
+        self.entries.iter().map(|(_, value)| value.clone())
+    }
+}
+
+/// Maps are equal when they hold the same keys mapped to equal values,
+/// regardless of insertion order.
+impl PartialEq for MapValue {
+    fn eq(&self, other: &Self) -> bool {
+        if self.len() != other.len() {
+            return false;
+        }
+        self.entries.iter().all(|(key, value)| {
+            other
+                .get(&key.to_value())
+                .is_some_and(|other| other == value)
+        })
+    }
+}
+
 /// A read-only collection of exported module bindings.
 ///
 /// Namespace members are created by `use "path" as alias;` and are resolved
@@ -69,6 +225,13 @@ pub enum Value {
     /// [`Rc::make_mut`] when the list is not aliased, which keeps the
     /// accumulate-in-a-loop idiom linear.
     List(Rc<Vec<Value>>),
+    /// An immutable map from string or integer keys to values.
+    ///
+    /// Entries live behind an `Rc` for the same sharing rules as
+    /// [`Value::List`]; iteration and rendering follow insertion order and
+    /// equality ignores it. Keys are inspected only through [`MapValue`]'s
+    /// internal representation.
+    Map(Rc<MapValue>),
 }
 
 /// A callable UCL function value.
@@ -113,6 +276,7 @@ impl Value {
             Value::Function(_) | Value::Builtin(_) => "function",
             Value::Module(_) => "module",
             Value::List(_) => "list",
+            Value::Map(_) => "map",
         }
     }
 
@@ -137,14 +301,33 @@ impl Value {
                     .join(", ");
                 format!("[{rendered}]")
             }
+            Value::Map(map) => {
+                if map.is_empty() {
+                    return "#{}".to_owned();
+                }
+                let rendered = map
+                    .entries
+                    .iter()
+                    .map(|(key, value)| {
+                        format!(
+                            "{}: {}",
+                            key.to_value().element_text(),
+                            value.element_text()
+                        )
+                    })
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                format!("#{{{rendered}}}")
+            }
         }
     }
 
     /// Renders the value the way it appears *inside* an echoed list.
     ///
     /// Strings are quoted so list contents stay unambiguous; everything
-    /// else renders exactly as it does at top level.
-    fn element_text(&self) -> String {
+    /// else renders exactly as it does at top level. Diagnostics reuse this
+    /// rendering for map keys.
+    pub(crate) fn element_text(&self) -> String {
         match self {
             Value::Str(string) => format!("\"{string}\""),
             other => other.display_text(),
