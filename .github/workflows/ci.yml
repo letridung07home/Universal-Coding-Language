@@ -38,11 +38,12 @@ jobs:
       - name: Run tests
         run: |
           set +e
-          cargo test --all-features 2>&1 | tee /tmp/tests.txt
+          cargo test --all-features -- --test-threads=1 2>&1 | tee /tmp/tests.txt
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
-            tail -c 8000 /tmp/tests.txt | python3 -c 'import sys, urllib.parse; sys.stdout.write("::error::raw=" + urllib.parse.quote(sys.stdin.read(), safe=""))'
-            echo
+            sed 's/\x1b\[[0-9;]*m//g' /tmp/tests.txt | tail -n 12 | python3 -c 'import sys, urllib.parse
+for i, line in enumerate(sys.stdin):
+    print("::error::t" + str(i) + "=" + urllib.parse.quote(line.rstrip(), safe=""))'
           fi
           exit "$status"
 
